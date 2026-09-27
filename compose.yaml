@@ -1,0 +1,29 @@
+name: telegram-fuuki-iin
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: apps/bot/Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Always place SQLite and its WAL/lock files on the persistent volume.
+      DATABASE_PATH: /var/lib/fuuki-iin/fuuki-iin.sqlite
+    volumes:
+      - bot-data:/var/lib/fuuki-iin
+    restart: unless-stopped
+    stop_grace_period: 90s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bot-data:

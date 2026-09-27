@@ -1,0 +1,17 @@
+{
+  "name": "@fuuki-iin/verification",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --disable-warning=ExperimentalWarning ../../scripts/build-verification.mjs",
+    "dev": "pnpm run build && wrangler pages dev",
+    "deploy": "pnpm run build && wrangler pages deploy"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iamtwz/TelegramFuukiIin.git",
+    "directory": "apps/verification"
+  }
+}

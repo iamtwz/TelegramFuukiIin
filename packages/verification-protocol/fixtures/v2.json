@@ -1,0 +1,13 @@
+{
+  "launch": {
+    "session": "0123456789abcdef0123456789abcdef",
+    "chat": "-1001234567890",
+    "sitekey": "synthetic-sitekey"
+  },
+  "submission": {
+    "v": 2,
+    "session": "0123456789abcdef0123456789abcdef",
+    "chat": "-1001234567890",
+    "token": "synthetic-turnstile-token"
+  }
+}

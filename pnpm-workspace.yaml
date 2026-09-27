@@ -1,0 +1,12 @@
+packages:
+  - apps/verification
+  - packages/verification-protocol
+
+# Do not execute dependency lifecycle scripts or pnpmfile hooks.
+ignoreScripts: true
+ignorePnpmfile: true
+saveExact: true
+verifyDepsBeforeRun: error
+minimumReleaseAge: 1440
+blockExoticSubdeps: true
+lockfileIncludeTarballUrl: true

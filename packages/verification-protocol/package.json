@@ -1,0 +1,13 @@
+{
+  "name": "@fuuki-iin/verification-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iamtwz/TelegramFuukiIin.git",
+    "directory": "packages/verification-protocol"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "telegram-fuuki-iin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@12.4.2",
+  "engines": {
+    "node": ">=24.2.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @fuuki-iin/verification run dev",
+    "preview:verification": "node scripts/preview-verification.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test scripts/*.test.mjs apps/verification/tests/*.test.mjs packages/verification-protocol/tests/*.test.mjs",
+    "check": "node scripts/check-lock.mjs && pnpm run typecheck && pnpm test",
+    "build": "pnpm --filter @fuuki-iin/verification run build",
+    "deploy:verification": "pnpm --filter @fuuki-iin/verification run deploy",
+    "test:runtime": "node scripts/runtime-smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "wrangler": "4.134.0",
+    "yaml": "2.9.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iamtwz/TelegramFuukiIin.git"
+  }
+}

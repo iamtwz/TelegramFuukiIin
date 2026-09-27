@@ -1,0 +1,23 @@
+# Allow only the Rust workspace inputs. Secrets, data, Git history, Node packages
+# and local build caches never enter the build context.
+**
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!LICENSE
+!apps/
+!apps/bot/
+!apps/bot/Cargo.toml
+!apps/bot/src/
+!apps/bot/src/**/*.rs
+!apps/bot/tests/
+!apps/bot/tests/**/*.rs
+!packages/
+!packages/verification-protocol/
+!packages/verification-protocol/Cargo.toml
+!packages/verification-protocol/src/
+!packages/verification-protocol/src/**/*.rs
+!packages/verification-protocol/tests/
+!packages/verification-protocol/tests/**/*.rs
+!packages/verification-protocol/fixtures/
+!packages/verification-protocol/fixtures/*.json

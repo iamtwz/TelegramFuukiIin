@@ -1,0 +1,56 @@
+# Local configuration and credentials
+.env
+.env.*
+*.env
+*.env.*
+!/.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+
+# Runtime data, backups and logs
+data/
+backups/
+logs/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.dump
+*.bak
+*.tar
+*.tar.gz
+*.tgz
+*.log
+*.instance.lock
+*.lock.pid
+
+# Dependencies, builds and tool state
+node_modules/
+.pnpm-store/
+target/
+dist/
+coverage/
+.cache/
+.wrangler/
+.cargo/credentials
+.cargo/credentials.toml
+
+# Machine/editor/agent state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex/
+.agents/
+*.swp
+*.swo

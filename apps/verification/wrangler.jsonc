@@ -1,0 +1,7 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "fuuki-iin-verification",
+  "pages_build_output_dir": "../../dist/verification",
+  "compatibility_date": "2026-09-24",
+  "dev": { "ip": "127.0.0.1", "port": 8788 }
+}
