@@ -298,7 +298,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "fuuki-iin-bot"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "reqwest",
@@ -1484,7 +1484,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "verification-protocol"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",

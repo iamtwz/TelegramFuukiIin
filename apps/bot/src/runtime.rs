@@ -50,7 +50,7 @@ pub async fn run<S: Services + 'static>(
     logger.event(
         LogLevel::Info,
         "bot.starting",
-        json!({"log_level":logger.level().as_str(),"managed_groups":config.chats.len()}),
+        json!({"version":crate::VERSION,"log_level":logger.level().as_str(),"managed_groups":config.chats.len()}),
     );
     let store = Arc::new(Store::open(&config.database)?);
     let _lock = instance_lock(&config)?;

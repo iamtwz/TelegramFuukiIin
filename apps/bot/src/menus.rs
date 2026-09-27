@@ -10,13 +10,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-pub const PUBLIC_HELP: &str =
-    "*在线检查 / Check availability*：`/ping`\n*我的身份 / My identity*：`/whoami`";
-const MENU_VERSION: u32 = 4;
+pub const PUBLIC_HELP: &str = "*在线检查 / Check availability*：`/ping`\n*我的身份 / My identity*：`/whoami`\n*Bot 版本 / Bot version*：`/version`";
+const MENU_VERSION: u32 = 5;
 
 fn command_list(private: bool, privileged: bool) -> Vec<Value> {
     let mut entries = if privileged {
-        vec![("ping", "在线检查"), ("whoami", "我的身份")]
+        vec![
+            ("ping", "在线检查"),
+            ("whoami", "我的身份"),
+            ("version", "Bot 版本"),
+        ]
     } else {
         commands::MENU.to_vec()
     };

@@ -1,3 +1,6 @@
+/// Application release version, shared by CLI, chat replies, logs and HTTP requests.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod admin;
 mod admin_audit;
 pub mod api;

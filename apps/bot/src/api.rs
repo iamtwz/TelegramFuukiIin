@@ -51,7 +51,7 @@ impl Api {
             .https_only(true)
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(12))
-            .user_agent("TelegramFuukiIin/0.1.0")
+            .user_agent(concat!("TelegramFuukiIin/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| Error::Config("http_client_init_failed"))?;
         Ok(Self {

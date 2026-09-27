@@ -120,8 +120,9 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
     e.send_markdown(
         user,
         &format!(
-            "{}\n群：{group}\n首条消息检测：{}\n检测范围：{scope}\n首次发言模式支持未入群评论；此前未记录的老用户也会检测。Guest Bot 回复逐条检测。\n入群验证：{}\n入群资料审核：{profile}\n人工审批：≥{}\n删除封禁：≥{}{controls}",
+            "{}\nBot 版本：{}\n群：{group}\n首条消息检测：{}\n检测范围：{scope}\n首次发言模式支持未入群评论；此前未记录的老用户也会检测。Guest Bot 回复逐条检测。\n入群验证：{}\n入群资料审核：{profile}\n人工审批：≥{}\n删除封禁：≥{}{controls}",
             bold("Telegram 风纪委员管理面板"),
+            code(crate::VERSION),
             if s.spam { "开启" } else { "关闭" },
             if s.captcha { "开启" } else { "关闭" },
             code(&format!("{:.1}%", s.review * 100.0)),
@@ -245,8 +246,9 @@ async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> 
     e.send_markdown(
         user,
         &format!(
-            "{}\n群：{group}\nBot 状态：{status}\n删除权限：{}\n封禁权限：{}\n审批入群权限：{}\n任务：待执行 {}，执行中 {}，已完成 {}，失败 {}",
+            "{}\nBot 版本：{}\n群：{group}\nBot 状态：{status}\n删除权限：{}\n封禁权限：{}\n审批入群权限：{}\n任务：待执行 {}，执行中 {}，已完成 {}，失败 {}",
             bold("状态与权限"),
+            code(crate::VERSION),
             permission("can_delete_messages"),
             permission("can_restrict_members"),
             permission("can_invite_users"),
@@ -413,11 +415,13 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
         if name == Some("help") {
             let help = if privileged {
                 format!(
-                    "{}：{}\n{}：{}\n{}：{}",
+                    "{}：{}\n{}：{}\n{}：{}\n{}：{}",
                     bold("在线检查"),
                     code("/ping"),
                     bold("我的身份"),
                     code("/whoami"),
+                    bold("版本查询"),
+                    code("/version"),
                     bold("管理面板"),
                     code("/admin"),
                 )

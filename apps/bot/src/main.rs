@@ -137,6 +137,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn version_is_available_without_a_subcommand_or_configuration() {
+        let result = Cli::try_parse_from(["bot", "--version"]);
+        let Err(error) = result else {
+            panic!("version must exit before executing a command");
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(error.to_string().contains(fuuki_iin_bot::VERSION));
+    }
+
+    #[test]
     fn logging_flags_work_before_and_after_subcommands() {
         for (args, expected) in [
             (vec!["bot", "--verbose", "run"], LogLevel::Verbose),

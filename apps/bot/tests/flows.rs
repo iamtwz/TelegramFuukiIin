@@ -448,12 +448,19 @@ async fn public_scopes_never_advertise_management_and_clear_language_overrides()
     assert_eq!(calls.len(), 5);
     for call in &calls {
         assert!(!has_admin_menu(call));
+        assert!(call["commands"].as_array().unwrap().iter().all(|c| {
+            matches!(
+                c["command"].as_str(),
+                Some("ping" | "whoami" | "version" | "help")
+            )
+        }));
         assert!(
             call["commands"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|c| { matches!(c["command"].as_str(), Some("ping" | "whoami" | "help")) })
+                .any(|c| c["command"] == "version"
+                    && c["description"] == "查看 Bot 版本 / Show bot version")
         );
         for language in ["en", "zh"] {
             assert!(e.services.calls("deleteMyCommands").iter().any(|delete| {
@@ -578,6 +585,49 @@ async fn persisted_menu_intent_survives_partial_api_failure_and_config_removal()
     assert!(!has_admin_menu(
         e.services.calls("setMyCommands").last().unwrap()
     ));
+}
+
+#[tokio::test]
+async fn older_private_menus_refresh_to_include_version_once() {
+    for privileged in [false, true] {
+        let (mut e, _) = setup(None);
+        if privileged {
+            Arc::get_mut(&mut e.config).unwrap().super_admins = vec![7];
+        }
+        e.store
+            .put(
+                0,
+                "menu:7",
+                &json!({"user":7,"applied":privileged,"version":4}),
+            )
+            .unwrap();
+        menus::refresh(&e).await.unwrap();
+        let calls = e.services.calls("setMyCommands");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(has_admin_menu(&calls[0]), privileged);
+        let version = calls[0]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["command"] == "version")
+            .unwrap();
+        assert_eq!(
+            version["description"],
+            if privileged {
+                "Bot 版本"
+            } else {
+                "查看 Bot 版本 / Show bot version"
+            }
+        );
+        assert!(
+            e.store.get::<Value>(0, "menu:7").unwrap().unwrap()["version"]
+                .as_u64()
+                .unwrap()
+                > 4
+        );
+        menus::refresh(&e).await.unwrap();
+        assert_eq!(e.services.calls("setMyCommands").len(), 1);
+    }
 }
 
 #[tokio::test]
@@ -1105,7 +1155,11 @@ fn configuration_literals_never_execute_shell_and_commands_are_scoped() {
 #[tokio::test]
 async fn public_commands_work_in_private_without_admin_access_or_model_calls() {
     let (e, _) = setup(None);
-    for (id, text) in [(70, "/ping"), (71, "/whoami@fuukiiintestbot -123")] {
+    for (id, text) in [
+        (70, "/ping"),
+        (71, "/whoami@fuukiiintestbot -123"),
+        (72, "/version@fuukiiintestbot"),
+    ] {
         let mut m = message(id);
         m["chat"] = json!({"id":USER,"type":"private"});
         m["text"] = json!(text);
@@ -1118,7 +1172,7 @@ async fn public_commands_work_in_private_without_admin_access_or_model_calls() {
     }
     drain(&e).await;
     let replies = e.services.calls("sendMessage");
-    assert_eq!(replies.len(), 2);
+    assert_eq!(replies.len(), 3);
     assert_eq!(formatting::rendered(&replies[0]), "Pong! 🏓");
     assert_eq!(replies[0]["chat_id"], USER);
     assert_eq!(replies[0]["reply_parameters"]["message_id"], 70);
@@ -1128,6 +1182,11 @@ async fn public_commands_work_in_private_without_admin_access_or_model_calls() {
     );
     assert_eq!(replies[1]["parse_mode"], "MarkdownV2");
     assert_eq!(replies[1]["link_preview_options"]["is_disabled"], true);
+    assert_eq!(
+        formatting::rendered(&replies[2]),
+        format!("版本 / Version：{}", fuuki_iin_bot::VERSION)
+    );
+    assert_eq!(replies[2]["reply_parameters"]["message_id"], 72);
     assert!(e.services.calls("getChatMember").is_empty());
     assert!(e.services.evidence.lock().unwrap().is_empty());
     assert_bilingual_replies(&e);
@@ -1154,7 +1213,7 @@ async fn ordinary_private_messages_do_not_reveal_a_service_introduction() {
     let replies = e.services.calls("sendMessage");
     assert_eq!(replies.len(), 1);
     let help = replies[0]["text"].as_str().unwrap();
-    assert!(help.contains("/ping") && help.contains("/whoami"));
+    assert!(help.contains("/ping") && help.contains("/whoami") && help.contains("/version"));
     for internal in [
         "/admin",
         "管理员",
@@ -1280,21 +1339,26 @@ async fn whoami_handles_absent_username_and_anonymous_sender_chat() {
 #[tokio::test]
 async fn public_commands_ignore_other_bots_channels_and_edits() {
     let (e, _) = setup(None);
-    let mut m = message(76);
-    m["text"] = json!("/ping@AnotherBot");
-    e.ingest(&json!({"update_id":76,"message":m})).unwrap();
-    m["chat"] = json!({"id":USER,"type":"private"});
-    e.ingest(&json!({"update_id":77,"message":m})).unwrap();
-    m["text"] = json!("/whoami");
-    m["chat"] = json!({"id":-1009876543210_i64,"type":"channel"});
-    e.ingest(&json!({"update_id":78,"message":m})).unwrap();
-    m["chat"] = json!({"id":CHAT,"type":"supergroup"});
-    e.ingest(&json!({"update_id":79,"edited_message":m}))
-        .unwrap();
-    m["from"]["is_bot"] = json!(true);
-    e.ingest(&json!({"update_id":80,"message":m})).unwrap();
-    m["chat"] = json!({"id":USER,"type":"private"});
-    e.ingest(&json!({"update_id":81,"message":m})).unwrap();
+    for (index, command) in ["ping", "whoami", "version"].into_iter().enumerate() {
+        let id = 760 + index as i64 * 10;
+        let mut m = message(id);
+        m["text"] = json!(format!("/{command}@AnotherBot"));
+        e.ingest(&json!({"update_id":id,"message":m})).unwrap();
+        m["chat"] = json!({"id":USER,"type":"private"});
+        e.ingest(&json!({"update_id":id+1,"message":m})).unwrap();
+        m["text"] = json!(format!("/{command}"));
+        m["chat"] = json!({"id":-1009876543210_i64,"type":"channel"});
+        e.ingest(&json!({"update_id":id+2,"message":m})).unwrap();
+        e.ingest(&json!({"update_id":id+3,"channel_post":m}))
+            .unwrap();
+        m["chat"] = json!({"id":CHAT,"type":"supergroup"});
+        e.ingest(&json!({"update_id":id+4,"edited_message":m}))
+            .unwrap();
+        m["from"]["is_bot"] = json!(true);
+        e.ingest(&json!({"update_id":id+5,"message":m})).unwrap();
+        m["chat"] = json!({"id":USER,"type":"private"});
+        e.ingest(&json!({"update_id":id+6,"message":m})).unwrap();
+    }
     drain(&e).await;
     assert!(e.services.calls("sendMessage").is_empty());
     assert!(e.services.calls("getChatMember").is_empty());
@@ -1313,7 +1377,11 @@ async fn discovery_works_before_configuration_without_managing_the_group() {
                 .unwrap();
             e.ingest(&json!({"update_id":901,"message":message(901)}))
                 .unwrap();
-            for (id, text) in [(902, "/ping"), (903, "/whoami@FuukiIinTestBot")] {
+            for (id, text) in [
+                (902, "/ping"),
+                (903, "/whoami@FuukiIinTestBot"),
+                (904, "/version"),
+            ] {
                 let mut m = message(id);
                 m["chat"]["type"] = json!(kind);
                 m["text"] = json!(text);
@@ -1323,13 +1391,17 @@ async fn discovery_works_before_configuration_without_managing_the_group() {
             }
             drain(&e).await;
             let replies = e.services.calls("sendMessage");
-            assert_eq!(replies.len(), 2);
+            assert_eq!(replies.len(), 3);
             assert_eq!(formatting::rendered(&replies[0]), "Pong! 🏓");
             assert_eq!(replies[1]["chat_id"], CHAT);
             assert!(
                 formatting::rendered(&replies[1]).contains(&format!("聊天 ID / Chat ID：{CHAT}"))
             );
-            assert_eq!(e.services.calls.lock().unwrap().len(), 2);
+            assert_eq!(
+                formatting::rendered(&replies[2]),
+                format!("版本 / Version：{}", fuuki_iin_bot::VERSION)
+            );
+            assert_eq!(e.services.calls.lock().unwrap().len(), 3);
             assert!(e.services.evidence.lock().unwrap().is_empty());
             assert!(cases(&e).is_empty());
             assert!(

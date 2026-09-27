@@ -6,9 +6,10 @@ use crate::{
 };
 use serde_json::{Value, json};
 
-pub const MENU: [(&str, &str); 2] = [
+pub const MENU: [(&str, &str); 3] = [
     ("ping", "检查在线状态 / Check availability"),
     ("whoami", "查看身份和聊天 ID / Show identity and chat ID"),
+    ("version", "查看 Bot 版本 / Show bot version"),
 ];
 
 pub fn name(message: &Value, bot: &str) -> Option<String> {
@@ -53,6 +54,8 @@ pub async fn handle<S: Services>(e: &Engine<S>, message: &Value) -> Result<()> {
     }
     let text = if command == "ping" {
         escape("Pong! 🏓")
+    } else if command == "version" {
+        format!("{}：{}", bold("版本 / Version"), code(crate::VERSION))
     } else {
         let identity = if let Some(id) = sender_chat["id"].as_i64() {
             format!(

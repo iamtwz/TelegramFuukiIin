@@ -193,6 +193,37 @@ fn validator_rejects_unescaped_characters_and_broken_entities() {
 }
 
 #[tokio::test]
+async fn version_uses_the_package_version_in_code_and_preserves_topic_reply() {
+    let (mut e, _) = setup(None);
+    Arc::get_mut(&mut e.config).unwrap().chats.clear();
+    let mut m = message(8000);
+    m["text"] = json!("/version@FuukiIinTestBot");
+    m["message_thread_id"] = json!(20);
+    e.ingest(&json!({"update_id":8000,"message":m})).unwrap();
+    drain(&e).await;
+    let replies = e.services.calls("sendMessage");
+    assert_eq!(replies.len(), 1);
+    assert_eq!(
+        replies[0]["text"],
+        format!("*版本 / Version*：`{}`", fuuki_iin_bot::VERSION)
+    );
+    assert_eq!(
+        rendered(&replies[0]),
+        format!("版本 / Version：{}", fuuki_iin_bot::VERSION)
+    );
+    assert_eq!(replies[0]["chat_id"], CHAT);
+    assert_eq!(replies[0]["message_thread_id"], 20);
+    assert_eq!(replies[0]["reply_parameters"]["message_id"], 8000);
+    assert_eq!(
+        replies[0]["reply_parameters"]["allow_sending_without_reply"],
+        true
+    );
+    assert_eq!(replies[0]["link_preview_options"]["is_disabled"], true);
+    assert!(e.services.calls("getChatMember").is_empty());
+    assert!(e.services.evidence.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn whoami_escapes_special_names_and_formats_identity_values() {
     let (e, _) = setup(None);
     let special_name = "Synthetic _*[]()~`>#+-=|{}.!\\ 🧪";

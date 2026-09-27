@@ -24,6 +24,7 @@ Docker 可用时执行 `node scripts/test-docker.mjs`，使用合成配置和隔
 ## 提交约定
 
 - 保留并更新 Cargo/pnpm 锁文件；固定依赖版本，不引入未经审查的 Git 或第三方 registry 依赖，不启用安装脚本。
+- 发布版本以根目录 `Cargo.toml` 的 `workspace.package.version` 为准，同步 Cargo 锁文件中的工作区包和各 npm 包版本；Bot 的版本展示读取构建版本，协议版本和数据库版本独立维护。
 - 行为变更补充有实际意义的测试；测试身份、链接、消息和凭据必须为合成数据。
 - 普通用户回复使用中英双语（`/ping` 仅回复英文），管理界面使用中文；验证页翻译集中在 `apps/verification/public/i18n.js`。
 - Bot 消息正文使用 MarkdownV2，标题/字段标签加粗，ID、用户名、命令和数值使用等宽格式；动态内容按所在上下文转义，长证据先拆分再包装代码块，不截断已格式化的 Markdown。按钮和命令菜单保持普通文本。
