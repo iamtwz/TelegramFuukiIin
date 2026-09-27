@@ -8,7 +8,7 @@ fn report(e: &Engine<Mock>, at: i64) -> Report {
 }
 fn all_text(e: &Engine<Mock>) -> String {
     e.services
-        .calls("sendMessage")
+        .replies()
         .iter()
         .map(super::formatting::rendered)
         .collect::<Vec<_>>()
@@ -350,12 +350,7 @@ async fn statistics_callbacks_check_current_authority_scope_and_dates() {
         admin::handle(&e, CHAT, &admin_callback(7, CHAT, "stats", raw))
             .await
             .unwrap();
-        assert!(
-            e.services.calls("sendMessage").last().unwrap()["text"]
-                .as_str()
-                .unwrap()
-                .contains("日期无效")
-        );
+        assert!(formatting::rendered(e.services.replies().last().unwrap()).contains("日期无效"));
     }
     e.services.calls.lock().unwrap().clear();
     admin::handle(&e, CHAT, &admin_callback(8, CHAT, "stats", ""))
@@ -415,9 +410,9 @@ async fn stats_menu_is_private_and_daily_navigation_has_bounded_callbacks() {
     )
     .await
     .unwrap();
-    let replies = e.services.calls("sendMessage");
+    let replies = e.services.replies();
     for reply in &replies {
-        assert!(reply["text"].as_str().unwrap().encode_utf16().count() <= 4096);
+        assert!(formatting::rendered(reply).encode_utf16().count() <= 4096);
         for row in reply["reply_markup"]["inline_keyboard"].as_array().unwrap() {
             for b in row.as_array().unwrap() {
                 assert!(b["callback_data"].as_str().unwrap().len() <= 64);

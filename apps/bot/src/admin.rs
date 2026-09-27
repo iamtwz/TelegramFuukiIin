@@ -1,4 +1,5 @@
 use crate::{
+    admin_view::{AdminReply, text_pages},
     api::{Services, can_manage, can_moderate, is_admin},
     config::Config,
     engine::Engine,
@@ -24,7 +25,13 @@ pub fn command(text: &str, bot: &str) -> Option<(String, Vec<String>)> {
 }
 pub fn target_chat(update: &Value, config: &Config) -> Option<i64> {
     if update["callback_query"].is_object() {
-        if update["callback_query"]["message"]["chat"]["type"] != "private" {
+        let source = &update["callback_query"];
+        if source["message"]["chat"]["type"] != "private"
+            || source["message"]["chat"]["id"].as_i64() != source["from"]["id"].as_i64()
+            || source["message"]["message_id"]
+                .as_i64()
+                .is_none_or(|id| id <= 0)
+        {
             return None;
         }
         return update["callback_query"]["data"]
@@ -43,7 +50,89 @@ pub fn target_chat(update: &Value, config: &Config) -> Option<i64> {
 pub(crate) fn button(chat: i64, label: &str, action: &str, id: &str) -> Value {
     json!({"text":label,"callback_data":format!("{action}|{chat}|{id}")})
 }
-async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool) -> Result<()> {
+fn back(chat: i64) -> Value {
+    json!({"inline_keyboard":[[button(chat,"返回上一级","panel","")]]})
+}
+
+fn base36(mut n: usize) -> String {
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((n % 36) as u32, 36).unwrap());
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    digits.into_iter().rev().collect()
+}
+
+fn case_cursor(id: &str, offset: usize, page: usize) -> String {
+    format!("{id}:{}:{}", base36(offset), base36(page))
+}
+
+async fn groups<S: Services>(
+    e: &Engine<S>,
+    reply: AdminReply,
+    offset: usize,
+    stats: bool,
+) -> Result<()> {
+    let groups = crate::menus::readable_groups(e, reply.user).await;
+    let privileged = e.config.is_super_admin(reply.user) || !groups.is_empty();
+    crate::menus::set_private(e, reply.user, privileged).await?;
+    if !privileged && reply.message.is_none() {
+        return Ok(());
+    }
+    let offset = offset.min(groups.len().saturating_sub(1)) / 10 * 10;
+    let mut rows = vec![];
+    let mut labels = vec![];
+    for group in groups.iter().skip(offset).take(10) {
+        let label = crate::chat_info::label(e, *group).await?;
+        let suffix = format!(" · {group}");
+        labels.push(format!(
+            "{} · {}",
+            escape(label.strip_suffix(&suffix).unwrap_or(&label)),
+            code(&group.to_string())
+        ));
+        rows.push(json!([button(
+            *group,
+            &label,
+            if stats { "stats" } else { "panel" },
+            ""
+        )]));
+    }
+    let action = if stats { "groupstats" } else { "groups" };
+    let mut navigation = vec![];
+    if offset > 0 {
+        navigation.push(button(0, "上一页", action, &(offset - 10).to_string()));
+    }
+    if offset + 10 < groups.len() {
+        navigation.push(button(0, "下一页", action, &(offset + 10).to_string()));
+    }
+    if !navigation.is_empty() {
+        rows.push(json!(navigation));
+    }
+    let text = if groups.is_empty() {
+        "没有可查看的已配置群。".into()
+    } else {
+        format!(
+            "{}\n{}\n第 {}/{} 页",
+            bold("选择要查看的群："),
+            labels.join("\n"),
+            code(&(offset / 10 + 1).to_string()),
+            code(&groups.len().div_ceil(10).to_string())
+        )
+    };
+    reply
+        .send_markdown(e, &text, json!({"inline_keyboard":rows}))
+        .await
+}
+
+async fn panel<S: Services>(
+    e: &Engine<S>,
+    chat: i64,
+    reply: AdminReply,
+    editable: bool,
+) -> Result<()> {
     let s = e.settings(chat)?;
     let mut rows = vec![];
     if editable {
@@ -97,6 +186,7 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
         button(chat, "审计记录", "audit", ""),
         button(chat, "每日统计", "stats", "")
     ]));
+    rows.push(json!([button(0, "返回上一级", "groups", "0")]));
     let controls = if editable {
         format!(
             "\n{}\n{}\n{}",
@@ -117,8 +207,8 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
     } else {
         "关闭（默认，发言时审核资料）"
     };
-    e.send_markdown(
-        user,
+    reply.send_markdown(
+        e,
         &format!(
             "{}\nBot 版本：{}\n群：{group}\n首条消息检测：{}\n检测范围：{scope}\n首次发言模式支持未入群评论；此前未记录的老用户也会检测。Guest Bot 回复逐条检测。\n入群验证：{}\n入群资料审核：{profile}\n人工审批：≥{}\n删除封禁：≥{}{controls}",
             bold("Telegram 风纪委员管理面板"),
@@ -135,95 +225,157 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
 async fn pending<S: Services>(
     e: &Engine<S>,
     chat: i64,
-    user: i64,
+    reply: AdminReply,
     offset: i64,
-    editable: bool,
-    join_editable: bool,
 ) -> Result<()> {
+    let offset = offset.clamp(0, 1_000_000);
     let cases = e
         .store
         .list::<Case>(chat, "case:", Some("review"), offset, 6)?;
-    if cases.is_empty() {
-        return e.send(user, "当前没有待审消息。", Value::Null).await;
-    }
     let group = crate::chat_info::markdown_label(e, chat).await?;
+    let mut text = format!(
+        "{}\n群：{group}\n第 {} 页",
+        bold("待审消息"),
+        code(&(offset / 5 + 1).to_string())
+    );
+    let mut rows = vec![];
     for c in cases.iter().take(5) {
-        let p = c.probability.map_or_else(
+        let score = c.probability.map_or_else(
             || "评分不可用，需人工审核".into(),
-            |p| format!("垃圾消息概率： {}", code(&format!("{:.1}%", p * 100.0))),
+            |p| format!("垃圾消息概率：{}", code(&format!("{:.1}%", p * 100.0))),
         );
-        let text = serde_json::to_string_pretty(&c.evidence)?
-            .chars()
-            .take(1200)
-            .collect::<String>();
-        let link = if c.kind != CaseKind::JoinProfile {
-            chat.to_string()
-                .strip_prefix("-100")
-                .map_or(String::new(), |id| {
-                    format!("\n[原消息](https://t.me/c/{id}/{})", c.message)
-                })
-        } else {
-            String::new()
-        };
         let kind = match c.kind {
             CaseKind::Message => "消息与资料",
             CaseKind::Guest => "Guest Bot 与召唤者",
             CaseKind::JoinProfile => "入群资料",
         };
-        let markup = if editable && (c.kind != CaseKind::JoinProfile || join_editable) {
-            json!({"inline_keyboard":[[button(chat,"放行","allow",&c.id),button(chat,if c.kind==CaseKind::JoinProfile {"拒绝并封禁"} else {"删除封禁"},"ban",&c.id)]]})
-        } else {
-            Value::Null
-        };
-        e.send_markdown(
-            user,
-            &format!(
-                "{}\n群：{group}\n案件： {} · {kind}\n用户： {} · {p}{link}\n完整证据： {}\n用户内容节选：\n{}",
-                bold("待审消息"),
-                code(&c.id),
-                code(&c.user.to_string()),
-                code(&format!("/case {chat} {}", c.id)),
-                pre(&text),
-            ),
-            markup,
-        )
-        .await?;
+        text.push_str(&format!(
+            "\n\n案件：{} · {kind}\n用户：{} · {score}",
+            code(&c.id),
+            code(&c.user.to_string())
+        ));
+        rows.push(json!([button(
+            chat,
+            &format!("查看案件 · {}", c.user),
+            "case",
+            &case_cursor(&c.id, offset as usize, 0)
+        )]));
+    }
+    if cases.is_empty() {
+        text.push_str("\n\n当前没有待审消息。");
+    }
+    let mut navigation = vec![];
+    if offset > 0 {
+        navigation.push(button(
+            chat,
+            "上一页",
+            "pending",
+            &offset.saturating_sub(5).to_string(),
+        ));
     }
     if cases.len() > 5 {
-        e.send(
-            user,
-            "还有更多待审消息：",
-            json!({"inline_keyboard":[[button(chat,"下一页","pending",&(offset+5).to_string())]]}),
-        )
-        .await?;
+        navigation.push(button(chat, "下一页", "pending", &(offset + 5).to_string()));
     }
-    Ok(())
+    if !navigation.is_empty() {
+        rows.push(json!(navigation));
+    }
+    rows.push(json!([
+        button(chat, "刷新", "pending", &offset.to_string()),
+        button(chat, "返回上一级", "panel", "")
+    ]));
+    reply
+        .send_markdown(e, &text, json!({"inline_keyboard":rows}))
+        .await
 }
-async fn case_detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, id: &str) -> Result<()> {
+
+async fn case_detail<S: Services>(
+    e: &Engine<S>,
+    chat: i64,
+    reply: AdminReply,
+    raw: &str,
+    editable: bool,
+    join_editable: bool,
+) -> Result<()> {
+    let parts = raw.split(':').collect::<Vec<_>>();
+    let id = parts.first().copied().unwrap_or("");
+    let offset = parts
+        .get(1)
+        .and_then(|v| usize::from_str_radix(v, 36).ok())
+        .unwrap_or(0)
+        .min(1_000_000);
+    let requested = parts
+        .get(2)
+        .and_then(|v| usize::from_str_radix(v, 36).ok())
+        .unwrap_or(0)
+        .min(46_655);
     let Some(case) = e.store.get::<Case>(chat, &format!("case:{id}"))? else {
-        return e
-            .send(user, "案件不存在或已过保留期限。", Value::Null)
-            .await;
+        return reply.send(e, "案件不存在或已过保留期限。", json!({"inline_keyboard":[[button(chat,"返回上一级","pending",&offset.to_string()),button(chat,"管理面板","panel","")]]})).await;
     };
     let text = serde_json::to_string_pretty(&case)?;
+    let pages = text_pages(&text, 2600);
+    let page = requested.min(pages.len().saturating_sub(1));
     let group = crate::chat_info::markdown_label(e, chat).await?;
-    let chars: Vec<char> = text.chars().collect();
-    for part in chars.chunks(1500) {
-        e.send_markdown(
-            user,
+    let mut rows = vec![];
+    if case.state == "review" && editable && (case.kind != CaseKind::JoinProfile || join_editable) {
+        rows.push(json!([
+            button(chat, "放行", "allow", id),
+            button(
+                chat,
+                if case.kind == CaseKind::JoinProfile {
+                    "拒绝并封禁"
+                } else {
+                    "删除封禁"
+                },
+                "ban",
+                id
+            )
+        ]));
+    }
+    if case.kind != CaseKind::JoinProfile
+        && let Some(group) = chat.to_string().strip_prefix("-100")
+    {
+        rows.push(json!([{"text":"在群中打开（已删消息可能无法打开）","url":format!("https://t.me/c/{group}/{}",case.message)}]));
+    }
+    let mut navigation = vec![];
+    if page > 0 {
+        navigation.push(button(
+            chat,
+            "上一页",
+            "case",
+            &case_cursor(id, offset, page - 1),
+        ));
+    }
+    if page + 1 < pages.len() {
+        navigation.push(button(
+            chat,
+            "下一页",
+            "case",
+            &case_cursor(id, offset, page + 1),
+        ));
+    }
+    if !navigation.is_empty() {
+        rows.push(json!(navigation));
+    }
+    rows.push(json!([
+        button(chat, "返回上一级", "pending", &offset.to_string()),
+        button(chat, "管理面板", "panel", "")
+    ]));
+    reply
+        .send_markdown(
+            e,
             &format!(
-                "{}：{}\n群：{group}\n{}",
+                "{}：{}\n群：{group}\n第 {}/{} 页\n{}",
                 bold("案件详情"),
                 code(id),
-                pre(&part.iter().collect::<String>()),
+                code(&(page + 1).to_string()),
+                code(&pages.len().to_string()),
+                pre(pages[page])
             ),
-            Value::Null,
+            json!({"inline_keyboard":rows}),
         )
-        .await?;
-    }
-    Ok(())
+        .await
 }
-async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> {
+async fn health<S: Services>(e: &Engine<S>, chat: i64, reply: AdminReply) -> Result<()> {
     let bot = e.member(chat, e.config.bot_id()).await?;
     let group = crate::chat_info::markdown_label(e, chat).await?;
     let status = match bot["status"].as_str() {
@@ -243,8 +395,8 @@ async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> 
         }
     };
     let stats = e.store.stats(chat)?;
-    e.send_markdown(
-        user,
+    reply.send_markdown(
+        e,
         &format!(
             "{}\nBot 版本：{}\n群：{group}\nBot 状态：{status}\n删除权限：{}\n封禁权限：{}\n审批入群权限：{}\n任务：待执行 {}，执行中 {}，已完成 {}，失败 {}",
             bold("状态与权限"),
@@ -257,7 +409,7 @@ async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> 
             code(&stats["done"].as_i64().unwrap_or(0).to_string()),
             code(&stats["dead"].as_i64().unwrap_or(0).to_string()),
         ),
-        Value::Null,
+        back(chat),
     )
     .await
 }
@@ -327,6 +479,51 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
     if source["from"]["is_bot"] == true || context["chat"]["type"] != "private" {
         return Ok(());
     }
+    let message = if callback {
+        if context["chat"]["id"].as_i64() != Some(user) {
+            return Ok(());
+        }
+        let Some(id) = context["message_id"].as_i64().filter(|id| *id > 0) else {
+            return Ok(());
+        };
+        Some(id)
+    } else {
+        None
+    };
+    let reply = AdminReply::new(user, message);
+    let callback_parts = source["data"]
+        .as_str()
+        .unwrap_or("")
+        .split('|')
+        .collect::<Vec<_>>();
+    if callback
+        && (callback_parts.len() != 3
+            || callback_parts.get(1).and_then(|s| s.parse::<i64>().ok()) != Some(chat))
+    {
+        return Ok(());
+    }
+    if callback && chat == 0 {
+        let action = callback_parts[0];
+        if !matches!(action, "groups" | "groupstats") {
+            return Ok(());
+        }
+        e.services
+            .telegram(
+                "answerCallbackQuery",
+                json!({"callback_query_id":source["id"]}),
+            )
+            .await?;
+        return groups(
+            e,
+            reply,
+            callback_parts[2]
+                .parse::<usize>()
+                .unwrap_or(0)
+                .min(1_000_000),
+            action == "groupstats",
+        )
+        .await;
+    }
     let super_admin = e.config.is_super_admin(user);
     let parsed = command(
         source["text"].as_str().unwrap_or(""),
@@ -365,53 +562,12 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
         if !matches!(name, Some("admin" | "help" | "start" | "stats")) {
             return Ok(());
         }
-        let groups = crate::menus::readable_groups(e, user).await;
-        let privileged = super_admin || !groups.is_empty();
-        crate::menus::set_private(e, user, privileged).await?;
         if matches!(name, Some("admin" | "stats")) {
-            if !privileged {
-                return Ok(());
-            }
-            let mut rows = vec![];
-            let mut labels = vec![];
-            for group in groups {
-                let label = crate::chat_info::label(e, group).await?;
-                let suffix = format!(" · {group}");
-                labels.push(format!(
-                    "{} · {}",
-                    escape(label.strip_suffix(&suffix).unwrap_or(&label)),
-                    code(&group.to_string()),
-                ));
-                rows.push(json!([button(
-                    group,
-                    &label,
-                    if name == Some("stats") {
-                        "stats"
-                    } else {
-                        "panel"
-                    },
-                    ""
-                )]));
-            }
-            if rows.is_empty() {
-                return e
-                    .send_markdown(
-                        user,
-                        "没有可查看的已配置群。",
-                        json!({"inline_keyboard":rows}),
-                    )
-                    .await;
-            }
-            for (labels, rows) in labels.chunks(10).zip(rows.chunks(10)) {
-                e.send_markdown(
-                    user,
-                    &format!("{}\n{}", bold("选择要查看的群："), labels.join("\n")),
-                    json!({"inline_keyboard":rows}),
-                )
-                .await?;
-            }
-            return Ok(());
+            return groups(e, reply, 0, name == Some("stats")).await;
         }
+        let readable = crate::menus::readable_groups(e, user).await;
+        let privileged = super_admin || !readable.is_empty();
+        crate::menus::set_private(e, user, privileged).await?;
         if name == Some("help") {
             let help = if privileged {
                 format!(
@@ -457,16 +613,31 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
     }
     crate::menus::set_private(e, user, true).await?;
     if callback {
-        let parts = source["data"]
-            .as_str()
-            .unwrap_or("")
-            .split('|')
-            .collect::<Vec<_>>();
-        if parts.get(1).and_then(|s| s.parse::<i64>().ok()) != Some(chat) {
+        let action = callback_parts[0];
+        let id = callback_parts[2];
+        if !matches!(
+            action,
+            "panel"
+                | "pending"
+                | "case"
+                | "health"
+                | "stats"
+                | "audit"
+                | "auditentry"
+                | "spamon"
+                | "spamoff"
+                | "capon"
+                | "capoff"
+                | "firstseen"
+                | "newmembers"
+                | "profileon"
+                | "profileoff"
+                | "allow"
+                | "ban"
+        ) {
+            e.services.telegram("answerCallbackQuery",json!({"callback_query_id":source["id"],"text":"菜单不可用，请重新打开管理面板。","show_alert":true})).await?;
             return Ok(());
         }
-        let action = parts.first().copied().unwrap_or("");
-        let id = parts.get(2).copied().unwrap_or("");
         let setting = [
             "spamon",
             "spamoff",
@@ -537,38 +708,37 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
             )
             .await?;
         return match action {
-            "allow" | "ban" => e.send(user, notice, Value::Null).await,
-            "pending" => {
-                pending(
-                    e,
-                    chat,
-                    user,
-                    id.parse::<i64>().unwrap_or(0).clamp(0, 1_000_000),
-                    can_moderate(&member),
-                    can_manage(&member),
-                )
-                .await
-            }
-            "health" => health(e, chat, user).await,
-            "stats" => crate::statistics::show(e, chat, user, id).await,
-            "audit" => crate::admin_audit::show(e, chat, user, id).await,
-            "auditentry" => crate::admin_audit::detail(e, chat, user, id).await,
-            _ => panel(e, chat, user, can_manage(&member)).await,
+            "allow" | "ban" => reply.send_markdown(e, &format!("{}：{}\n{}", bold("案件"), code(id), escape(notice)),json!({"inline_keyboard":[[button(chat,"返回待审消息","pending","0"),button(chat,"管理面板","panel","")]]})).await,
+            "pending" => pending(e, chat, reply, id.parse::<i64>().unwrap_or(0)).await,
+            "case" => case_detail(e,chat,reply,id,can_moderate(&member),can_manage(&member)).await,
+            "health" => health(e, chat, reply).await,
+            "stats" => crate::statistics::show(e, chat, reply, id).await,
+            "audit" => crate::admin_audit::show(e, chat, reply, id).await,
+            "auditentry" => crate::admin_audit::detail(e, chat, reply, id).await,
+            _ => panel(e, chat, reply, can_manage(&member)).await,
         };
     }
     let Some((cmd, args)) = parsed else {
         return Ok(());
     };
     match cmd.as_str() {
-        "admin" | "start" => return panel(e, chat, user, can_manage(&member)).await,
-        "pending" => {
-            return pending(e, chat, user, 0, can_moderate(&member), can_manage(&member)).await;
+        "admin" | "start" => return panel(e, chat, reply, can_manage(&member)).await,
+        "pending" => return pending(e, chat, reply, 0).await,
+        "case" => {
+            return case_detail(
+                e,
+                chat,
+                reply,
+                args.get(1).map_or("", String::as_str),
+                can_moderate(&member),
+                can_manage(&member),
+            )
+            .await;
         }
-        "case" => return case_detail(e, chat, user, args.get(1).map_or("", String::as_str)).await,
-        "health" => return health(e, chat, user).await,
-        "audit" => return crate::admin_audit::show(e, chat, user, "").await,
+        "health" => return health(e, chat, reply).await,
+        "audit" => return crate::admin_audit::show(e, chat, reply, "").await,
         "stats" => {
-            return crate::statistics::show(e, chat, user, args.get(1).map_or("", String::as_str))
+            return crate::statistics::show(e, chat, reply, args.get(1).map_or("", String::as_str))
                 .await;
         }
         _ => (),
@@ -616,7 +786,7 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
                 &serde_json::to_string(&settings)?,
                 Some(user),
             )?;
-            panel(e, chat, user, can_manage(&member)).await
+            panel(e, chat, reply, can_manage(&member)).await
         }
         "retry" => {
             let count = e.store.retry(chat, e.now())?;
@@ -698,5 +868,27 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
             )
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn case_cursors_keep_the_origin_page_inside_telegram_callback_limit() {
+        let id = "a".repeat(32);
+        let cursor = case_cursor(&id, 1_000_000, 46_655);
+        assert!(
+            button(-9_007_199_254_740_991, "案件", "case", &cursor)["callback_data"]
+                .as_str()
+                .unwrap()
+                .len()
+                <= 64
+        );
+        let parts = cursor.split(':').collect::<Vec<_>>();
+        assert_eq!(parts[0], id);
+        assert_eq!(usize::from_str_radix(parts[1], 36).unwrap(), 1_000_000);
+        assert_eq!(usize::from_str_radix(parts[2], 36).unwrap(), 46_655);
     }
 }

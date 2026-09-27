@@ -3,6 +3,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod admin;
 mod admin_audit;
+mod admin_view;
 pub mod api;
 pub mod audit;
 pub mod captcha;
