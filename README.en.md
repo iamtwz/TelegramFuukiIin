@@ -69,6 +69,7 @@ Screened content is sent to Jev through OpenRouter. Subsequent ordinary messages
 
 ## Documentation
 
+- [Changelog (Chinese)](CHANGELOG.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Administration](docs/ADMIN.md)
 - [Privacy](docs/PRIVACY.md)

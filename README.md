@@ -69,6 +69,7 @@ docker compose up -d bot
 
 ## 文档
 
+- [更新日志](CHANGELOG.md)
 - [部署说明](docs/DEPLOYMENT.md)
 - [管理说明](docs/ADMIN.md)
 - [隐私说明](docs/PRIVACY.md)
