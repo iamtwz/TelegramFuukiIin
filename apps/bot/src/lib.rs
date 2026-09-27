@@ -23,3 +23,4 @@ pub mod profiles;
 pub mod runtime;
 pub mod statistics;
 pub mod store;
+mod verbose;

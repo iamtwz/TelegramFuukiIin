@@ -72,3 +72,53 @@ fn malformed_super_admin_ids_fail_configuration() {
         assert!(Config::from_map(&vars).is_err(), "accepted {value}");
     }
 }
+
+#[test]
+fn verbose_groups_are_optional_deduplicated_and_managed() {
+    let mut vars = base();
+    assert!(Config::from_map(&vars).unwrap().verbose_chats.is_empty());
+    for value in ["", " ", "\t\n"] {
+        vars.insert("VERBOSE_CHAT_IDS".into(), value.into());
+        assert!(Config::from_map(&vars).unwrap().verbose_chats.is_empty());
+    }
+    vars.insert(
+        "MANAGED_CHAT_IDS".into(),
+        "-100123,-456,-9007199254740991".into(),
+    );
+    vars.insert(
+        "VERBOSE_CHAT_IDS".into(),
+        " -100123, -100123, -9007199254740991 ".into(),
+    );
+    let mut config = Config::from_map(&vars).unwrap();
+    assert_eq!(config.verbose_chats, [-100123, -9_007_199_254_740_991]);
+    assert!(config.is_verbose(-100123));
+    assert!(config.is_verbose(-9_007_199_254_740_991));
+    assert!(!config.is_verbose(-456));
+    assert!(!config.is_verbose(123));
+    config.chats.clear();
+    assert!(!config.is_verbose(-100123));
+}
+
+#[test]
+fn verbose_groups_reject_malformed_or_unmanaged_ids() {
+    let mut vars = base();
+    vars.insert("MANAGED_CHAT_IDS".into(), "-123,-456".into());
+    for value in [
+        ",",
+        "-123,",
+        ",-123",
+        "-123, , -456",
+        "0",
+        "123",
+        "all",
+        "-9007199254740992",
+        "-789",
+        "-123,-789",
+    ] {
+        vars.insert("VERBOSE_CHAT_IDS".into(), value.into());
+        assert!(Config::from_map(&vars).is_err(), "accepted {value}");
+    }
+    vars.remove("MANAGED_CHAT_IDS");
+    vars.insert("VERBOSE_CHAT_IDS".into(), "-123".into());
+    assert!(Config::from_map(&vars).is_err());
+}

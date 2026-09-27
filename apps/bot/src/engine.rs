@@ -133,6 +133,18 @@ impl<S: Services> Engine<S> {
         if message["chat"]["type"] == "private" && message["web_app_data"].is_object() {
             return self.receive_verification(message);
         }
+        if let Some(chat) = message["chat"]["id"].as_i64()
+            && self.config.is_verbose(chat)
+            && crate::verbose::is_command(message, &self.config.bot_username)
+        {
+            self.queue(
+                chat,
+                "manual_jev",
+                &uid.to_string(),
+                json!({"message":message}),
+            )?;
+            return Ok(());
+        }
         if crate::commands::name(message, &self.config.bot_username).is_some() {
             if message["chat"]["type"] == "private" {
                 self.queue(0, "command", &uid.to_string(), message.clone())?;
@@ -603,7 +615,9 @@ impl<S: Services> Engine<S> {
             .as_mut()
             .ok_or(Error::external("evidence_expired", true))?;
         crate::profiles::enrich(self, chat, evidence).await?;
-        // Persist exactly the profile snapshot used by this case, including on retries.
+        // Persist the profile snapshot and the model being called. Failures
+        // before this point must not produce a group-visible model result.
+        c.model = Some(self.config.jev_model.clone());
         self.store.put(chat, &format!("case:{id}"), &c)?;
         let evidence = c
             .evidence
@@ -630,6 +644,9 @@ impl<S: Services> Engine<S> {
             && let Some(job) = crate::join_screening::approval_job(&c, chat, self.now(), "profile")
         {
             jobs.push(job);
+        }
+        if let Some(notice) = crate::verbose::case_notice(self, &c, chat) {
+            jobs.push(notice);
         }
         self.store.apply(
             vec![change(chat, format!("case:{id}"), &c)?],
@@ -728,9 +745,19 @@ impl<S: Services> Engine<S> {
         // moderation queued before the configuration change.
         if matches!(
             job.kind.as_str(),
-            "classify" | "enforce" | "notify" | "welcome" | "alert" | "admin_notice"
+            "classify"
+                | "enforce"
+                | "notify"
+                | "welcome"
+                | "alert"
+                | "admin_notice"
+                | "manual_jev"
+                | "verbose_notice"
         ) && !self.config.chats.contains(&job.chat)
         {
+            if job.kind == "manual_jev" {
+                self.discard_manual_jev(job)?;
+            }
             return Ok(());
         }
         let id = job.payload["id"].as_str().unwrap_or("");
@@ -741,6 +768,8 @@ impl<S: Services> Engine<S> {
             "invite" => self.invite(job.chat, id).await,
             "approve" => self.approve(job.chat, id).await,
             "classify" => self.classify(job.chat, id).await,
+            "manual_jev" => self.manual_jev(job).await,
+            "verbose_notice" => self.verbose_notice(job).await,
             "enforce" => self.enforce(job.chat, id).await,
             "welcome" => {
                 self.send(
@@ -783,8 +812,13 @@ impl<S: Services> Engine<S> {
                 Err(Error::Database(e))
             }
             Err(error) => {
-                let exhausted =
-                    error.permanent() || job.attempts >= if job.kind == "classify" { 3 } else { 6 };
+                let exhausted = error.permanent()
+                    || job.attempts
+                        >= if matches!(job.kind.as_str(), "classify" | "manual_jev") {
+                            3
+                        } else {
+                            6
+                        };
                 let delay = (1u64 << job.attempts.min(8))
                     .min(300)
                     .max(error.retry_after());
@@ -793,6 +827,10 @@ impl<S: Services> Engine<S> {
                     "error":error.to_string(),"exhausted":exhausted,"elapsed_ms":started.elapsed().as_millis(),
                     "retry_after_seconds":if exhausted { None } else { Some(delay) },
                 }));
+                if exhausted && job.kind == "manual_jev" {
+                    self.manual_jev_failed(job)?;
+                    return self.store.complete(&job.id);
+                }
                 if exhausted && job.kind == "classify" {
                     let id = job.payload["id"].as_str().unwrap_or("");
                     if let Some(mut c) = self.store.get::<Case>(job.chat, &format!("case:{id}"))?
@@ -800,15 +838,19 @@ impl<S: Services> Engine<S> {
                     {
                         c.state = "review".into();
                         c.reason = Some(error.to_string());
+                        let mut jobs = vec![NewJob::new(
+                            job.chat,
+                            "notify",
+                            id,
+                            json!({"id":id}),
+                            self.now(),
+                        )];
+                        if let Some(notice) = crate::verbose::case_notice(self, &c, job.chat) {
+                            jobs.push(notice);
+                        }
                         self.store.apply(
                             vec![change(job.chat, format!("case:{id}"), &c)?],
-                            &[NewJob::new(
-                                job.chat,
-                                "notify",
-                                id,
-                                json!({"id":id}),
-                                self.now(),
-                            )],
+                            &jobs,
                             self.now(),
                         )?;
                         self.audit(
@@ -830,7 +872,10 @@ impl<S: Services> Engine<S> {
                 if exhausted {
                     self.audit(job.chat, "job_failed", &job.id, &error.to_string(), None)?;
                     if job.chat != 0
-                        && !matches!(job.kind.as_str(), "alert" | "admin_notice" | "menus")
+                        && !matches!(
+                            job.kind.as_str(),
+                            "alert" | "admin_notice" | "menus" | "verbose_notice"
+                        )
                     {
                         self.queue(
                             job.chat,

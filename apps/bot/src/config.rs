@@ -16,6 +16,7 @@ pub struct Config {
     pub verification_url: String,
     pub bot_username: String,
     pub chats: Vec<i64>,
+    pub verbose_chats: Vec<i64>,
     pub super_admins: Vec<i64>,
     pub database: PathBuf,
     pub jev_model: String,
@@ -96,6 +97,26 @@ impl Config {
                 chats.push(id);
             }
         }
+        let mut verbose_chats = Vec::new();
+        let configured_verbose_chats = vars.get("VERBOSE_CHAT_IDS").map_or("", |v| v.trim());
+        for item in configured_verbose_chats
+            .split(',')
+            .filter(|_| !configured_verbose_chats.is_empty())
+        {
+            let id: i64 = item
+                .trim()
+                .parse()
+                .map_err(|_| Error::Config("invalid_verbose_chat"))?;
+            if !(-9_007_199_254_740_991..0).contains(&id) {
+                return Err(Error::Config("invalid_verbose_chat"));
+            }
+            if !chats.contains(&id) {
+                return Err(Error::Config("verbose_chat_must_be_managed"));
+            }
+            if !verbose_chats.contains(&id) {
+                verbose_chats.push(id);
+            }
+        }
         let mut super_admins = Vec::new();
         let configured_admins = vars.get("SUPER_ADMIN_IDS").map_or("", |v| v.trim());
         for item in configured_admins
@@ -124,6 +145,7 @@ impl Config {
             verification_url: url.origin().ascii_serialization(),
             bot_username,
             chats,
+            verbose_chats,
             super_admins,
             database: vars
                 .get("DATABASE_PATH")
@@ -133,6 +155,9 @@ impl Config {
                 .cloned()
                 .unwrap_or_else(|| "typesafe/jev-1.13".into()),
         })
+    }
+    pub fn is_verbose(&self, chat: i64) -> bool {
+        self.chats.contains(&chat) && self.verbose_chats.contains(&chat)
     }
     pub fn is_super_admin(&self, user: i64) -> bool {
         user > 0 && self.super_admins.contains(&user)

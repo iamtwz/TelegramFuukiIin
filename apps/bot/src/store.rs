@@ -302,6 +302,8 @@ impl Store {
         let tx = db.transaction()?;
         statistics::prune(&tx, now)?;
         tx.execute("DELETE FROM audit WHERE at<?1", [now - 2_592_000])?;
+        tx.execute("DELETE FROM records WHERE key LIKE 'manual_jev:%' AND json_extract(value,'$.created_at')<?1", [now-604800])?;
+        tx.execute("DELETE FROM records WHERE key LIKE 'jev_limit:%' AND json_extract(value,'$.created_at')<?1", [now-86400])?;
         tx.execute(
             "DELETE FROM jobs WHERE status IN ('done','dead') AND created_at<?1",
             [now - 604800],
