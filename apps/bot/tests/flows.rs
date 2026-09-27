@@ -4,6 +4,8 @@ mod admin_audit;
 mod clock_skew;
 #[path = "flows/first_seen.rs"]
 mod first_seen;
+#[path = "flows/formatting.rs"]
+mod formatting;
 #[path = "flows/profiles_guest.rs"]
 mod profiles_guest;
 #[path = "flows/statistics.rs"]
@@ -88,6 +90,9 @@ impl Services for Mock {
         Ok(self.verdict.lock().unwrap().clone().unwrap_or_else(|| json!({"success":token.starts_with("valid-"),"hostname":"verify.example.com","action":"join","cdata":token.strip_prefix("valid-").unwrap_or("")})))
     }
     async fn telegram(&self, method: &str, body: Value) -> Result<Value> {
+        if method == "sendMessage" {
+            formatting::rendered(&body);
+        }
         self.calls
             .lock()
             .unwrap()
@@ -725,6 +730,9 @@ fn assert_reply_language(e: &Engine<Mock>, bilingual: bool, recipient: Option<i6
             continue;
         }
         if method == "sendMessage" || method == "answerCallbackQuery" {
+            if method == "sendMessage" && formatting::rendered(body) == "Pong! 🏓" {
+                continue;
+            }
             text(&body["text"], bilingual);
             if method == "answerCallbackQuery" {
                 assert!(body["text"].as_str().unwrap().chars().count() <= 200);
@@ -1111,14 +1119,14 @@ async fn public_commands_work_in_private_without_admin_access_or_model_calls() {
     drain(&e).await;
     let replies = e.services.calls("sendMessage");
     assert_eq!(replies.len(), 2);
-    assert_eq!(replies[0]["text"], "在线 / Pong! 🏓");
+    assert_eq!(formatting::rendered(&replies[0]), "Pong! 🏓");
     assert_eq!(replies[0]["chat_id"], USER);
     assert_eq!(replies[0]["reply_parameters"]["message_id"], 70);
     assert_eq!(
         replies[1]["text"],
-        "用户 ID / User ID：42\n昵称 / Name：<林> 开发者 小明\n用户名 / Username：@new_user\n聊天 ID / Chat ID：42\n聊天类型 / Chat type：私聊 / Private"
+        "*用户 ID / User ID*：`42`\n*昵称 / Name*：<林\\> 开发者 小明\n*用户名 / Username*：`@new_user`\n*聊天 ID / Chat ID*：`42`\n*聊天类型 / Chat type*：私聊 / Private"
     );
-    assert!(replies[1]["parse_mode"].is_null());
+    assert_eq!(replies[1]["parse_mode"], "MarkdownV2");
     assert_eq!(replies[1]["link_preview_options"]["is_disabled"], true);
     assert!(e.services.calls("getChatMember").is_empty());
     assert!(e.services.evidence.lock().unwrap().is_empty());
@@ -1236,12 +1244,7 @@ async fn group_command_replies_in_topic_and_keeps_first_message_moderation() {
         replies[0]["reply_parameters"]["allow_sending_without_reply"],
         true
     );
-    assert!(
-        replies[0]["text"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("聊天 ID / Chat ID：{CHAT}"))
-    );
+    assert!(formatting::rendered(&replies[0]).contains(&format!("聊天 ID / Chat ID：{CHAT}")));
     assert_eq!(e.services.evidence.lock().unwrap().len(), 1);
     assert_eq!(cases(&e)[0].message, 72);
     e.message(CHAT, &message(73)).unwrap();
@@ -1264,13 +1267,8 @@ async fn whoami_handles_absent_username_and_anonymous_sender_chat() {
     drain(&e).await;
     let replies = e.services.calls("sendMessage");
     assert_eq!(replies.len(), 2);
-    assert!(
-        replies[0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("用户名 / Username：未设置 / Not set")
-    );
-    let anonymous = replies[1]["text"].as_str().unwrap();
+    assert!(formatting::rendered(&replies[0]).contains("用户名 / Username：未设置 / Not set"));
+    let anonymous = formatting::rendered(&replies[1]);
     assert!(anonymous.contains("无法获取个人身份"));
     assert!(anonymous.contains(&format!("身份 ID / Identity ID：{CHAT}")));
     assert!(!anonymous.contains("1087968824"));
@@ -1326,13 +1324,10 @@ async fn discovery_works_before_configuration_without_managing_the_group() {
             drain(&e).await;
             let replies = e.services.calls("sendMessage");
             assert_eq!(replies.len(), 2);
-            assert_eq!(replies[0]["text"], "在线 / Pong! 🏓");
+            assert_eq!(formatting::rendered(&replies[0]), "Pong! 🏓");
             assert_eq!(replies[1]["chat_id"], CHAT);
             assert!(
-                replies[1]["text"]
-                    .as_str()
-                    .unwrap()
-                    .contains(&format!("聊天 ID / Chat ID：{CHAT}"))
+                formatting::rendered(&replies[1]).contains(&format!("聊天 ID / Chat ID：{CHAT}"))
             );
             assert_eq!(e.services.calls.lock().unwrap().len(), 2);
             assert!(e.services.evidence.lock().unwrap().is_empty());

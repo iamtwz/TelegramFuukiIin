@@ -3,6 +3,7 @@ use crate::{
     config::Config,
     engine::Engine,
     error::Result,
+    markdown::{bold, code, escape, pre},
     model::{Case, CaseKind, ScreeningMode},
     store::change,
 };
@@ -97,7 +98,12 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
         button(chat, "每日统计", "stats", "")
     ]));
     let controls = if editable {
-        format!("\n/thresholds {chat} 60 80\n/retry {chat}\n/unban {chat} USER_ID")
+        format!(
+            "\n{}\n{}\n{}",
+            code(&format!("/thresholds {chat} 60 80")),
+            code(&format!("/retry {chat}")),
+            code(&format!("/unban {chat} USER_ID")),
+        )
     } else {
         "\n设置仅供查看".into()
     };
@@ -105,13 +111,25 @@ async fn panel<S: Services>(e: &Engine<S>, chat: i64, user: i64, editable: bool)
         ScreeningMode::NewMembers => "入群后的首条消息",
         ScreeningMode::FirstSeen => "本群首次记录的发言",
     };
-    let group = crate::chat_info::label(e, chat).await?;
+    let group = crate::chat_info::markdown_label(e, chat).await?;
     let profile = if s.join_profile_review {
         "开启（额外调用 Jev，受检测总开关控制）"
     } else {
         "关闭（默认，发言时审核资料）"
     };
-    e.send(user,&format!("Telegram 风纪委员管理面板\n群：{group}\n首条消息检测：{}\n检测范围：{scope}\n首次发言模式支持未入群评论；此前未记录的老用户也会检测。Guest Bot 回复逐条检测。\n入群验证：{}\n入群资料审核：{profile}\n人工审批：≥{:.1}%\n删除封禁：≥{:.1}%{controls}",if s.spam {"开启"} else {"关闭"},if s.captcha {"开启"} else {"关闭"},s.review*100.0,s.ban*100.0),json!({"inline_keyboard":rows})).await
+    e.send_markdown(
+        user,
+        &format!(
+            "{}\n群：{group}\n首条消息检测：{}\n检测范围：{scope}\n首次发言模式支持未入群评论；此前未记录的老用户也会检测。Guest Bot 回复逐条检测。\n入群验证：{}\n入群资料审核：{profile}\n人工审批：≥{}\n删除封禁：≥{}{controls}",
+            bold("Telegram 风纪委员管理面板"),
+            if s.spam { "开启" } else { "关闭" },
+            if s.captcha { "开启" } else { "关闭" },
+            code(&format!("{:.1}%", s.review * 100.0)),
+            code(&format!("{:.1}%", s.ban * 100.0)),
+        ),
+        json!({"inline_keyboard":rows}),
+    )
+    .await
 }
 async fn pending<S: Services>(
     e: &Engine<S>,
@@ -127,11 +145,11 @@ async fn pending<S: Services>(
     if cases.is_empty() {
         return e.send(user, "当前没有待审消息。", Value::Null).await;
     }
-    let group = crate::chat_info::label(e, chat).await?;
+    let group = crate::chat_info::markdown_label(e, chat).await?;
     for c in cases.iter().take(5) {
         let p = c.probability.map_or_else(
             || "评分不可用，需人工审核".into(),
-            |p| format!("垃圾消息概率： {:.1}%", p * 100.0),
+            |p| format!("垃圾消息概率： {}", code(&format!("{:.1}%", p * 100.0))),
         );
         let text = serde_json::to_string_pretty(&c.evidence)?
             .chars()
@@ -141,7 +159,7 @@ async fn pending<S: Services>(
             chat.to_string()
                 .strip_prefix("-100")
                 .map_or(String::new(), |id| {
-                    format!("\n原消息： https://t.me/c/{id}/{}", c.message)
+                    format!("\n[原消息](https://t.me/c/{id}/{})", c.message)
                 })
         } else {
             String::new()
@@ -156,7 +174,19 @@ async fn pending<S: Services>(
         } else {
             Value::Null
         };
-        e.send(user,&format!("群：{group}\n案件： {} · {kind}\n用户： {} · {p}{link}\n完整证据： /case {chat} {}\n用户内容节选：\n{text}",c.id,c.user,c.id),markup).await?;
+        e.send_markdown(
+            user,
+            &format!(
+                "{}\n群：{group}\n案件： {} · {kind}\n用户： {} · {p}{link}\n完整证据： {}\n用户内容节选：\n{}",
+                bold("待审消息"),
+                code(&c.id),
+                code(&c.user.to_string()),
+                code(&format!("/case {chat} {}", c.id)),
+                pre(&text),
+            ),
+            markup,
+        )
+        .await?;
     }
     if cases.len() > 5 {
         e.send(
@@ -175,14 +205,16 @@ async fn case_detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, id: &str)
             .await;
     };
     let text = serde_json::to_string_pretty(&case)?;
-    let group = crate::chat_info::label(e, chat).await?;
+    let group = crate::chat_info::markdown_label(e, chat).await?;
     let chars: Vec<char> = text.chars().collect();
     for part in chars.chunks(1500) {
-        e.send(
+        e.send_markdown(
             user,
             &format!(
-                "案件详情：{id}\n群：{group}\n{}",
-                part.iter().collect::<String>()
+                "{}：{}\n群：{group}\n{}",
+                bold("案件详情"),
+                code(id),
+                pre(&part.iter().collect::<String>()),
             ),
             Value::Null,
         )
@@ -192,7 +224,7 @@ async fn case_detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, id: &str)
 }
 async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> {
     let bot = e.member(chat, e.config.bot_id()).await?;
-    let group = crate::chat_info::label(e, chat).await?;
+    let group = crate::chat_info::markdown_label(e, chat).await?;
     let status = match bot["status"].as_str() {
         Some("creator") => "群主",
         Some("administrator") => "管理员",
@@ -210,7 +242,22 @@ async fn health<S: Services>(e: &Engine<S>, chat: i64, user: i64) -> Result<()> 
         }
     };
     let stats = e.store.stats(chat)?;
-    e.send(user,&format!("群：{group}\nBot 状态：{status}\n删除权限：{}\n封禁权限：{}\n审批入群权限：{}\n任务：待执行 {}，执行中 {}，已完成 {}，失败 {}",permission("can_delete_messages"),permission("can_restrict_members"),permission("can_invite_users"),stats["pending"].as_i64().unwrap_or(0),stats["running"].as_i64().unwrap_or(0),stats["done"].as_i64().unwrap_or(0),stats["dead"].as_i64().unwrap_or(0)),Value::Null).await
+    e.send_markdown(
+        user,
+        &format!(
+            "{}\n群：{group}\nBot 状态：{status}\n删除权限：{}\n封禁权限：{}\n审批入群权限：{}\n任务：待执行 {}，执行中 {}，已完成 {}，失败 {}",
+            bold("状态与权限"),
+            permission("can_delete_messages"),
+            permission("can_restrict_members"),
+            permission("can_invite_users"),
+            code(&stats["pending"].as_i64().unwrap_or(0).to_string()),
+            code(&stats["running"].as_i64().unwrap_or(0).to_string()),
+            code(&stats["done"].as_i64().unwrap_or(0).to_string()),
+            code(&stats["dead"].as_i64().unwrap_or(0).to_string()),
+        ),
+        Value::Null,
+    )
+    .await
 }
 pub fn decide<S: Services>(
     e: &Engine<S>,
@@ -324,8 +371,15 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
                 return Ok(());
             }
             let mut rows = vec![];
+            let mut labels = vec![];
             for group in groups {
                 let label = crate::chat_info::label(e, group).await?;
+                let suffix = format!(" · {group}");
+                labels.push(format!(
+                    "{} · {}",
+                    escape(label.strip_suffix(&suffix).unwrap_or(&label)),
+                    code(&group.to_string()),
+                ));
                 rows.push(json!([button(
                     group,
                     &label,
@@ -337,25 +391,40 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
                     ""
                 )]));
             }
-            return e
-                .send(
+            if rows.is_empty() {
+                return e
+                    .send_markdown(
+                        user,
+                        "没有可查看的已配置群。",
+                        json!({"inline_keyboard":rows}),
+                    )
+                    .await;
+            }
+            for (labels, rows) in labels.chunks(10).zip(rows.chunks(10)) {
+                e.send_markdown(
                     user,
-                    if rows.is_empty() {
-                        "没有可查看的已配置群。"
-                    } else {
-                        "选择要查看的群："
-                    },
+                    &format!("{}\n{}", bold("选择要查看的群："), labels.join("\n")),
                     json!({"inline_keyboard":rows}),
                 )
-                .await;
+                .await?;
+            }
+            return Ok(());
         }
         if name == Some("help") {
             let help = if privileged {
-                "在线检查：/ping\n我的身份：/whoami\n管理面板：/admin"
+                format!(
+                    "{}：{}\n{}：{}\n{}：{}",
+                    bold("在线检查"),
+                    code("/ping"),
+                    bold("我的身份"),
+                    code("/whoami"),
+                    bold("管理面板"),
+                    code("/admin"),
+                )
             } else {
-                crate::menus::PUBLIC_HELP
+                crate::menus::PUBLIC_HELP.into()
             };
-            return e.send(user, help, Value::Null).await;
+            return e.send_markdown(user, &help, Value::Null).await;
         }
         return Ok(());
     }
@@ -511,30 +580,69 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
     }
     match cmd.as_str() {
         "thresholds" => {
-            let parse = |index| args.get(index).and_then(|s: &String| s.parse::<f64>().ok()).unwrap_or(f64::NAN) / 100.0;
+            let parse = |index| {
+                args.get(index)
+                    .and_then(|s: &String| s.parse::<f64>().ok())
+                    .unwrap_or(f64::NAN)
+                    / 100.0
+            };
             let review = parse(1);
             let ban = parse(2);
-            if args.len() != 3 || !review.is_finite() || !ban.is_finite()
-                || review < 0.0 || review >= ban || ban > 1.0 {
-                let usage = format!("用法： /thresholds {chat} 60 80\n阈值要求：0 ≤ 人工审核阈值 < 删除封禁阈值 ≤ 100。");
-                return e.send(user, &usage, Value::Null).await;
+            if args.len() != 3
+                || !review.is_finite()
+                || !ban.is_finite()
+                || review < 0.0
+                || review >= ban
+                || ban > 1.0
+            {
+                let usage = format!(
+                    "用法： {}\n阈值要求：0 ≤ 人工审核阈值 < 删除封禁阈值 ≤ 100。",
+                    code(&format!("/thresholds {chat} 60 80"))
+                );
+                return e.send_markdown(user, &usage, Value::Null).await;
             }
             let mut settings = e.settings(chat)?;
             settings.review = review;
             settings.ban = ban;
             e.store.put(chat, "settings", &settings)?;
-            e.audit(chat, "thresholds_changed", &chat.to_string(),
-                &serde_json::to_string(&settings)?, Some(user))?;
+            e.audit(
+                chat,
+                "thresholds_changed",
+                &chat.to_string(),
+                &serde_json::to_string(&settings)?,
+                Some(user),
+            )?;
             panel(e, chat, user, can_manage(&member)).await
         }
         "retry" => {
             let count = e.store.retry(chat, e.now())?;
-            e.audit(chat, "jobs_retried", &chat.to_string(), &count.to_string(), Some(user))?;
-            e.send(user, &format!("已安排重试 {count} 个失败任务。"), Value::Null).await
+            e.audit(
+                chat,
+                "jobs_retried",
+                &chat.to_string(),
+                &count.to_string(),
+                Some(user),
+            )?;
+            e.send_markdown(
+                user,
+                &format!("已安排重试 {} 个失败任务。", code(&count.to_string())),
+                Value::Null,
+            )
+            .await
         }
         "unban" => {
-            let Some(target) = args.get(1).and_then(|s| s.parse::<i64>().ok()).filter(|id| *id > 0) else {
-                return e.send(user, &format!("用法： /unban {chat} USER_ID"), Value::Null).await;
+            let Some(target) = args
+                .get(1)
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|id| *id > 0)
+            else {
+                return e
+                    .send_markdown(
+                        user,
+                        &format!("用法： {}", code(&format!("/unban {chat} USER_ID"))),
+                        Value::Null,
+                    )
+                    .await;
             };
             let mut offset = 0;
             // Materialize all matching cases before mutation to avoid pagination skips.
@@ -543,22 +651,48 @@ pub async fn handle<S: Services>(e: &Engine<S>, chat: i64, u: &Value) -> Result<
                 let page = e.store.list::<Case>(chat, "case:", None, offset, 100)?;
                 let count = page.len();
                 cases.extend(page);
-                if count < 100 { break; }
+                if count < 100 {
+                    break;
+                }
                 offset += 100;
             }
-            let changes = cases.into_iter()
-                .filter(|c| (c.user == target || c.guest_caller.as_ref().is_some_and(|caller| caller.user==target)) && matches!(c.state.as_str(), "enforcing" | "classifying" | "review"))
+            let changes = cases
+                .into_iter()
+                .filter(|c| {
+                    (c.user == target
+                        || c.guest_caller
+                            .as_ref()
+                            .is_some_and(|caller| caller.user == target))
+                        && matches!(c.state.as_str(), "enforcing" | "classifying" | "review")
+                })
                 .map(|mut c| {
                     c.state = "allowed".into();
                     c.actor = Some(user);
                     change(chat, format!("case:{}", c.id), &c)
-                }).collect::<Result<Vec<_>>>()?;
+                })
+                .collect::<Result<Vec<_>>>()?;
             e.store.apply(changes, &[], e.now())?;
-            e.services.telegram("unbanChatMember",
-                json!({"chat_id":chat,"user_id":target,"only_if_banned":true})).await?;
+            e.services
+                .telegram(
+                    "unbanChatMember",
+                    json!({"chat_id":chat,"user_id":target,"only_if_banned":true}),
+                )
+                .await?;
             e.audit(chat, "user_unbanned", &target.to_string(), "", Some(user))?;
-            e.send(user, "已解除封禁，用户可重新申请并完成验证。", Value::Null).await
+            e.send(user, "已解除封禁，用户可重新申请并完成验证。", Value::Null)
+                .await
         }
-        _ => e.send(user, "管理命令：\n/admin /pending /case /health /audit /stats /thresholds /retry /unban\n请附带群 ID。", Value::Null).await,
+        _ => {
+            e.send_markdown(
+                user,
+                &format!(
+                    "{}：\n{}\n请附带群 ID。",
+                    bold("管理命令"),
+                    code("/admin /pending /case /health /audit /stats /thresholds /retry /unban")
+                ),
+                Value::Null,
+            )
+            .await
+        }
     }
 }

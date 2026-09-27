@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 pub const PUBLIC_HELP: &str =
-    "在线检查 / Check availability: /ping\n我的身份 / My identity: /whoami";
+    "*在线检查 / Check availability*：`/ping`\n*我的身份 / My identity*：`/whoami`";
 const MENU_VERSION: u32 = 4;
 
 fn command_list(private: bool, privileged: bool) -> Vec<Value> {

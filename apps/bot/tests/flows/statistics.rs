@@ -10,7 +10,7 @@ fn all_text(e: &Engine<Mock>) -> String {
     e.services
         .calls("sendMessage")
         .iter()
-        .map(|r| r["text"].as_str().unwrap())
+        .map(super::formatting::rendered)
         .collect::<Vec<_>>()
         .join("\n")
 }

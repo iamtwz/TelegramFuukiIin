@@ -1,4 +1,9 @@
-use crate::{api::Services, engine::Engine, error::Result};
+use crate::{
+    api::Services,
+    engine::Engine,
+    error::Result,
+    markdown::{bold, code, escape},
+};
 use serde_json::{Value, json};
 
 pub const MENU: [(&str, &str); 2] = [
@@ -11,7 +16,7 @@ pub fn name(message: &Value, bot: &str) -> Option<String> {
     MENU.iter().any(|(cmd, _)| *cmd == name).then_some(name)
 }
 
-// Keep user-controlled names on one line without interpreting HTML/Markdown.
+// Keep user-controlled names on one line; escape them when adding formatting.
 fn label(value: &Value) -> String {
     value
         .as_str()
@@ -47,12 +52,17 @@ pub async fn handle<S: Services>(e: &Engine<S>, message: &Value) -> Result<()> {
         return Ok(());
     }
     let text = if command == "ping" {
-        "在线 / Pong! 🏓".to_owned()
+        escape("Pong! 🏓")
     } else {
         let identity = if let Some(id) = sender_chat["id"].as_i64() {
             format!(
-                "当前以群组或频道身份发言，无法获取个人身份。\nPosting as a group or channel; personal identity is unavailable.\n发送身份 / Posting as：{}\n身份 ID / Identity ID：{id}",
-                label(&sender_chat["title"])
+                "{}\n{}\n{}：{}\n{}：{}",
+                escape("当前以群组或频道身份发言，无法获取个人身份。"),
+                escape("Posting as a group or channel; personal identity is unavailable."),
+                bold("发送身份 / Posting as"),
+                escape(&label(&sender_chat["title"])),
+                bold("身份 ID / Identity ID"),
+                code(&id.to_string())
             )
         } else {
             let nickname = [label(&sender["first_name"]), label(&sender["last_name"])]
@@ -62,20 +72,31 @@ pub async fn handle<S: Services>(e: &Engine<S>, message: &Value) -> Result<()> {
                 .join(" ");
             let username = label(&sender["username"]);
             let username = if username.is_empty() {
-                "未设置 / Not set".to_owned()
+                escape("未设置 / Not set")
             } else {
-                format!("@{username}")
+                code(&format!("@{username}"))
             };
             format!(
-                "用户 ID / User ID：{}\n昵称 / Name：{nickname}\n用户名 / Username：{username}",
-                sender["id"]
+                "{}：{}\n{}：{}\n{}：{username}",
+                bold("用户 ID / User ID"),
+                code(&sender["id"].to_string()),
+                bold("昵称 / Name"),
+                escape(&nickname),
+                bold("用户名 / Username")
             )
         };
-        format!("{identity}\n聊天 ID / Chat ID：{chat}\n聊天类型 / Chat type：{chat_type}")
+        format!(
+            "{identity}\n{}：{}\n{}：{}",
+            bold("聊天 ID / Chat ID"),
+            code(&chat.to_string()),
+            bold("聊天类型 / Chat type"),
+            escape(chat_type)
+        )
     };
     let mut reply = json!({
         "chat_id": chat,
         "text": text,
+        "parse_mode": "MarkdownV2",
         "link_preview_options": {"is_disabled": true},
     });
     if let Some(id) = message["message_id"].as_i64().filter(|id| *id > 0) {

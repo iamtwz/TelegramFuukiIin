@@ -3,6 +3,7 @@ use crate::{
     api::{Services, is_admin},
     engine::Engine,
     error::Result,
+    markdown::{bold, code},
     menus,
     model::{Case, Job},
 };
@@ -56,23 +57,36 @@ pub async fn deliver<S: Services>(e: &Engine<S>, job: &Job) -> Result<()> {
         if case.state != "review" {
             return Ok(());
         }
-        let group = crate::chat_info::label(e, chat).await?;
+        let group = crate::chat_info::markdown_label(e, chat).await?;
         let probability = case.probability.map_or_else(
             || "需要人工审核".into(),
-            |p| format!("垃圾消息概率： {:.1}%", p * 100.0),
+            |p| format!("垃圾消息概率： {}", code(&format!("{:.1}%", p * 100.0))),
         );
         let kind = if case.kind == crate::model::CaseKind::JoinProfile {
             "入群资料"
         } else {
             "消息与资料"
         };
-        e.send(user, &format!("有一项{kind}需要审核\n群：{group}\n案件： {id}\n{probability}"), json!({"inline_keyboard":[[{"text":"查看待审案件","callback_data":format!("pending|{chat}|0")}]]})).await
-    } else {
-        let group = crate::chat_info::label(e, chat).await?;
-        e.send(
+        e.send_markdown(
             user,
             &format!(
-                "群：{group}\n有任务失败，请检查：\n/health {chat}\n/audit {chat}\n/retry {chat}"
+                "{}\n群：{group}\n案件： {}\n{probability}",
+                bold(&format!("有一项{kind}需要审核")),
+                code(id)
+            ),
+            json!({"inline_keyboard":[[{"text":"查看待审案件","callback_data":format!("pending|{chat}|0")}]]}),
+        )
+        .await
+    } else {
+        let group = crate::chat_info::markdown_label(e, chat).await?;
+        e.send_markdown(
+            user,
+            &format!(
+                "群：{group}\n{}\n{}\n{}\n{}",
+                bold("有任务失败，请检查："),
+                code(&format!("/health {chat}")),
+                code(&format!("/audit {chat}")),
+                code(&format!("/retry {chat}"))
             ),
             Value::Null,
         )

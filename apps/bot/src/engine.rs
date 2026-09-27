@@ -55,7 +55,16 @@ impl<S: Services> Engine<S> {
             .await
     }
     pub async fn send(&self, chat: i64, text: &str, markup: Value) -> Result<()> {
-        let mut data = json!({"chat_id":chat,"text":text.chars().take(3900).collect::<String>(),"link_preview_options":{"is_disabled":true}});
+        self.send_markdown(
+            chat,
+            &crate::markdown::escape(&crate::markdown::truncate(text, 3900)),
+            markup,
+        )
+        .await
+    }
+    /// Send complete MarkdownV2. Callers bound or split raw content before formatting.
+    pub async fn send_markdown(&self, chat: i64, text: &str, markup: Value) -> Result<()> {
+        let mut data = json!({"chat_id":chat,"text":text,"parse_mode":"MarkdownV2","link_preview_options":{"is_disabled":true}});
         if !markup.is_null() {
             data["reply_markup"] = markup;
         }

@@ -12,6 +12,7 @@ pub mod evidence;
 mod guest;
 pub mod join_screening;
 pub mod logging;
+pub mod markdown;
 pub mod menus;
 pub mod model;
 pub mod notifications;

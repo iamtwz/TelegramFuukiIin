@@ -60,3 +60,13 @@ pub async fn label<S: Services>(e: &Engine<S>, chat: i64) -> Result<String> {
         |c| format!("{} · {chat}", c.title),
     ))
 }
+
+pub async fn markdown_label<S: Services>(e: &Engine<S>, chat: i64) -> Result<String> {
+    let label = label(e, chat).await?;
+    let suffix = format!(" · {chat}");
+    let id = crate::markdown::code(&chat.to_string());
+    Ok(label.strip_suffix(&suffix).map_or_else(
+        || id.clone(),
+        |title| format!("{} · {id}", crate::markdown::escape(title)),
+    ))
+}

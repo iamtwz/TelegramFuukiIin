@@ -1,5 +1,12 @@
 //! Daily statistics use a fixed UTC+8 boundary, independent of the host timezone.
-use crate::{admin::button, api::Services, chat_info, engine::Engine, error::Result};
+use crate::{
+    admin::button,
+    api::Services,
+    chat_info,
+    engine::Engine,
+    error::Result,
+    markdown::{bold, code, escape},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -63,22 +70,29 @@ pub struct Report {
 
 fn rate(numerator: i64, denominator: i64) -> String {
     if denominator == 0 {
-        "—".into()
+        code("—")
     } else {
-        format!("{:.1}%", numerator as f64 * 100.0 / denominator as f64)
+        code(&format!(
+            "{:.1}%",
+            numerator as f64 * 100.0 / denominator as f64
+        ))
     }
 }
 fn amount(sum: i64, known: i64, attempts: i64) -> String {
     if attempts == 0 {
-        return "0".into();
+        return code("0");
     }
     if known == 0 {
-        return format!("未知（{attempts} 次未返回用量）");
+        return format!("未知（{} 次未返回用量）", code(&attempts.to_string()));
     }
     if known == attempts {
-        sum.to_string()
+        code(&sum.to_string())
     } else {
-        format!("已知 {sum}（另有 {} 次未知）", attempts - known)
+        format!(
+            "已知 {}（另有 {} 次未知）",
+            code(&sum.to_string()),
+            code(&(attempts - known).to_string())
+        )
     }
 }
 
@@ -102,20 +116,24 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
         parsed.filter(|(_, end)| (today - RETENTION_DAYS + 1..=today).contains(end))
     else {
         return e
-            .send(
+            .send_markdown(
                 user,
-                "日期无效，请使用最近 365 天内的日期：/stats 群ID YYYY-MM-DD",
+                &format!(
+                    "日期无效，请使用最近 {} 天内的日期：{}",
+                    code("365"),
+                    code("/stats 群ID YYYY-MM-DD")
+                ),
                 Value::Null,
             )
             .await;
     };
     let start = (end - span + 1).max(today - RETENTION_DAYS + 1);
     let report = e.store.statistics_report(chat, start, end, e.now())?;
-    let group = chat_info::label(e, chat).await?;
+    let group = chat_info::markdown_label(e, chat).await?;
     let dates = if start == end {
-        report.start.clone()
+        code(&report.start)
     } else {
-        format!("{} 至 {}", report.start, report.end)
+        format!("{} 至 {}", code(&report.start), code(&report.end))
     };
     let people = if span == 1 {
         "人数"
@@ -123,16 +141,16 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
         "人次（每日去重后相加）"
     };
     let cost = if report.attempts == 0 {
-        "$0".into()
+        code("$0")
     } else if report.cost_known == 0 {
         "未知".into()
     } else if report.cost_known == report.attempts {
-        format!("${:.9}", report.cost)
+        code(&format!("${:.9}", report.cost))
     } else {
         format!(
-            "已知 ${:.9}（另有 {} 次未知）",
-            report.cost,
-            report.attempts - report.cost_known
+            "已知 {}（另有 {} 次未知）",
+            code(&format!("${:.9}", report.cost)),
+            code(&(report.attempts - report.cost_known).to_string())
         )
     };
     let coverage = if report.partial {
@@ -143,37 +161,54 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
     let total_tokens = if report.attempts > 0 && report.input_known + report.output_known == 0 {
         "未知".into()
     } else if report.input_known < report.attempts || report.output_known < report.attempts {
-        format!("已知 {}（用量不完整）", report.input + report.output)
+        format!(
+            "已知 {}（用量不完整）",
+            code(&(report.input + report.output).to_string())
+        )
     } else {
-        (report.input + report.output).to_string()
+        code(&(report.input + report.output).to_string())
     };
     let profiles = format!(
-        "入群资料审核\n送审：{} 次 · 高风险：{} 次\n中风险：{} 次 · 分类失败：{} 次",
-        report.profiles, report.profile_spam, report.profile_review, report.profile_failed
+        "{}\n送审：{} 次 · 高风险：{} 次\n中风险：{} 次 · 分类失败：{} 次",
+        bold("入群资料审核"),
+        code(&report.profiles.to_string()),
+        code(&report.profile_spam.to_string()),
+        code(&report.profile_review.to_string()),
+        code(&report.profile_failed.to_string())
     );
     let text = if report.unavailable {
         format!(
-            "群统计\n{group}\n{dates} · UTC+8\n\n该日期尚未启用统计，历史数据不可用。\n统计启用：{} UTC+8",
-            report.since
+            "{}\n{group}\n{dates} · {}\n\n该日期尚未启用统计，历史数据不可用。\n统计启用：{} {}",
+            bold("群统计"),
+            code("UTC+8"),
+            code(&report.since),
+            code("UTC+8")
         )
     } else {
         format!(
-            "群统计\n{group}\n{dates} · UTC+8\n\n入群申请\n申请{people}：{}\n已通过{people}：{}\n通过率：{}\n\n消息检测\n纳入检测：{} 条\n成功分类：{} 条\n高风险：{} 条 · Spam 率：{}\n中风险（转人工）：{} 条\n分类失败：{} 条\n待检测：{} 条 · 跳过检测：{} 条\n\n{profiles}\n\n模型用量（消息和入群资料，按调用日期，含重试）\n调用尝试：{} 次\n输入 Tokens：{}\n输出 Tokens：{}\nTokens 合计：{total_tokens}\n接口返回费用：{cost}\n\n通过人数归属申请日；Spam 率 = 达到案件封禁阈值的条数 / 成功分类条数。\n统计启用：{} UTC+8{coverage}。仅包含 Bot 观察到的数据。",
-            report.applicants,
-            report.approved,
+            "{}\n{group}\n{dates} · {}\n\n{}\n申请{people}：{}\n已通过{people}：{}\n通过率：{}\n\n{}\n纳入检测：{} 条\n成功分类：{} 条\n高风险：{} 条 · Spam 率：{}\n中风险（转人工）：{} 条\n分类失败：{} 条\n待检测：{} 条 · 跳过检测：{} 条\n\n{profiles}\n\n{}\n调用尝试：{} 次\n输入 Tokens：{}\n输出 Tokens：{}\nTokens 合计：{total_tokens}\n接口返回费用：{cost}\n\n{}\n统计启用：{} {}{coverage}。仅包含 Bot 观察到的数据。",
+            bold("群统计"),
+            code("UTC+8"),
+            bold("入群申请"),
+            code(&report.applicants.to_string()),
+            code(&report.approved.to_string()),
             rate(report.approved, report.applicants),
-            report.messages,
-            report.classified,
-            report.spam,
+            bold("消息检测"),
+            code(&report.messages.to_string()),
+            code(&report.classified.to_string()),
+            code(&report.spam.to_string()),
             rate(report.spam, report.classified),
-            report.review,
-            report.failed,
-            report.pending,
-            report.skipped,
-            report.attempts,
+            code(&report.review.to_string()),
+            code(&report.failed.to_string()),
+            code(&report.pending.to_string()),
+            code(&report.skipped.to_string()),
+            bold("模型用量（消息和入群资料，按调用日期，含重试）"),
+            code(&report.attempts.to_string()),
             amount(report.input, report.input_known, report.attempts),
             amount(report.output, report.output_known, report.attempts),
-            report.since
+            escape("通过人数归属申请日；Spam 率 = 达到案件封禁阈值的条数 / 成功分类条数。"),
+            code(&report.since),
+            code("UTC+8")
         )
     };
     let period = match span {
@@ -219,5 +254,6 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
         button(chat, "刷新", "stats", &format!("{period}:{end}")),
         button(chat, "管理面板", "panel", "")
     ]));
-    e.send(user, &text, json!({"inline_keyboard":rows})).await
+    e.send_markdown(user, &text, json!({"inline_keyboard":rows}))
+        .await
 }

@@ -31,7 +31,7 @@ fn text(e: &Engine<Mock>) -> String {
     e.services
         .calls("sendMessage")
         .iter()
-        .map(|m| m["text"].as_str().unwrap())
+        .map(super::formatting::rendered)
         .collect::<Vec<_>>()
         .join("\n")
 }

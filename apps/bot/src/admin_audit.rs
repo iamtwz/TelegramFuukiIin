@@ -5,6 +5,7 @@ use crate::{
     chat_info,
     engine::Engine,
     error::Result,
+    markdown::{bold, code, escape, pre},
     model::{Case, CaseKind},
 };
 use serde_json::{Value, json};
@@ -26,28 +27,30 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
             .await;
     };
     let page = e.store.audit_page(chat, cursor)?;
-    let group = chat_info::label(e, chat).await?;
+    let group = chat_info::markdown_label(e, chat).await?;
     let mut text = format!(
-        "审计记录\n{group}\n类型：{} · 第 {}/{} 页 · 共 {} 条\n时间：UTC",
-        cursor.filter.label(),
+        "{}\n{group}\n类型：{} · 第 {}/{} 页 · 共 {} 条\n时间：{}",
+        bold("审计记录"),
+        escape(cursor.filter.label()),
         page.cursor.page + 1,
         page.pages,
-        page.total
+        page.total,
+        code("UTC")
     );
     let mut rows = vec![];
     for entry in page.entries {
         text.push_str(&format!(
-            "\n\n#{} {} · {}\n目标：{}\n操作人：{}",
-            entry.id,
-            entry.time,
-            excerpt(entry.label(), 60),
-            excerpt(&entry.target, 60),
+            "\n\n{} {} · {}\n目标：{}\n操作人：{}",
+            code(&format!("#{}", entry.id)),
+            code(&entry.time),
+            bold(&excerpt(entry.label(), 60)),
+            code(&excerpt(&entry.target, 60)),
             entry
                 .actor
-                .map_or_else(|| "系统".into(), |id| id.to_string())
+                .map_or_else(|| "系统".into(), |id| code(&id.to_string()))
         ));
         if !entry.detail.is_empty() {
-            text.push_str(&format!("\n{}", excerpt(&entry.detail, 120)));
+            text.push_str(&format!("\n{}", code(&excerpt(&entry.detail, 120))));
         }
         let label = if entry.case_id().is_some() {
             "查看原消息"
@@ -130,27 +133,43 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
         ),
         button(chat, "管理面板", "panel", "")
     ]));
-    e.send(user, &text, json!({"inline_keyboard":rows})).await
+    e.send_markdown(user, &text, json!({"inline_keyboard":rows}))
+        .await
 }
 
-/// Split without dropping evidence or exceeding Telegram's UTF-16 text limit.
+/// Split raw evidence before adding complete Markdown code blocks to each part.
+/// Count UTF-16 units and the extra escapes needed inside a code block.
+fn evidence_parts(text: &str, limit: usize) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut length = 0;
+    for (offset, ch) in text.char_indices() {
+        let cost = ch.len_utf16() + usize::from(matches!(ch, '`' | '\\'));
+        if length + cost > limit {
+            parts.push(&text[start..offset]);
+            start = offset;
+            length = 0;
+        }
+        length += cost;
+    }
+    if start < text.len() {
+        parts.push(&text[start..]);
+    }
+    parts
+}
+
 async fn send_parts<S: Services>(
     e: &Engine<S>,
     user: i64,
     heading: &str,
     text: &str,
 ) -> Result<()> {
-    let chars = text.chars().collect::<Vec<_>>();
-    let parts = chars.chunks(1200);
+    let parts = evidence_parts(text, 1200);
     let total = parts.len();
-    for (i, part) in parts.enumerate() {
-        e.send(
+    for (i, part) in parts.into_iter().enumerate() {
+        e.send_markdown(
             user,
-            &format!(
-                "{heading}\n（{}/{total}）\n{}",
-                i + 1,
-                part.iter().collect::<String>()
-            ),
+            &format!("{heading}\n（{}/{total}）\n{}", i + 1, pre(part)),
             Value::Null,
         )
         .await?;
@@ -239,11 +258,12 @@ pub async fn detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str)
             .send(user, "记录不存在或已过保留期限。", Value::Null)
             .await;
     };
-    let group = chat_info::label(e, chat).await?;
+    let group = chat_info::markdown_label(e, chat).await?;
     let heading = format!(
-        "审计 #{} · {}\n{group}",
-        entry.id,
-        excerpt(entry.label(), 60)
+        "{} {} · {}\n{group}",
+        bold("审计"),
+        code(&format!("#{}", entry.id)),
+        bold(&excerpt(entry.label(), 60))
     );
     let text = format!(
         "时间：{} UTC\n目标：{}\n操作人：{}\n详情：{}",
@@ -275,21 +295,28 @@ pub async fn detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str)
         .probability
         .map_or_else(|| "未取得评分".into(), |p| format!("{:.1}%", p * 100.0));
     let text = format!(
-        "案件：{}\n用户 ID：{}\n垃圾消息概率：{probability}\n原消息快照：检测时保存的正文、按钮和可见信息，不包含媒体文件。",
-        case.id, case.user
+        "{}\n案件：{}\n用户 ID：{}\n垃圾消息概率：{}\n原消息快照：检测时保存的正文、按钮和可见信息，不包含媒体文件。",
+        bold("案件详情"),
+        code(&case.id),
+        code(&case.user.to_string()),
+        code(&probability)
     );
     let markup = if case.kind == CaseKind::JoinProfile {
         Value::Null
     } else {
         chat.to_string().strip_prefix("-100").map_or(Value::Null, |id| json!({"inline_keyboard":[[{"text":"在群中打开（已删消息可能无法打开）","url":format!("https://t.me/c/{id}/{}", case.message)}]]}))
     };
-    e.send(user, &text, markup).await?;
+    e.send_markdown(user, &text, markup).await?;
     match case.evidence {
         Some(evidence) => {
             send_parts(
                 e,
                 user,
-                &format!("原消息快照 · 审计 #{}", entry.id),
+                &format!(
+                    "{} · {}",
+                    bold("原消息快照"),
+                    code(&format!("审计 #{}", entry.id))
+                ),
                 &snapshot(&evidence)?,
             )
             .await
@@ -301,6 +328,25 @@ pub async fn detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str)
                 Value::Null,
             )
             .await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_parts_preserve_emoji_backticks_and_backslashes() {
+        let evidence = "正文💰`\\```[链接](https://example.invalid)\n".repeat(200);
+        let parts = evidence_parts(&evidence, 1200);
+        assert!(parts.len() > 1);
+        assert_eq!(parts.concat(), evidence);
+        for part in parts {
+            let block = pre(part);
+            assert!(block.encode_utf16().count() <= 1208);
+            assert!(block.starts_with("```\n"));
+            assert!(block.ends_with("\n```"));
         }
     }
 }

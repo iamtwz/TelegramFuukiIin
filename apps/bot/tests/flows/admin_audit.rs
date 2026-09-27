@@ -30,7 +30,7 @@ fn texts(e: &Engine<Mock>) -> String {
     e.services
         .calls("sendMessage")
         .iter()
-        .map(|r| r["text"].as_str().unwrap())
+        .map(super::formatting::rendered)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -335,7 +335,7 @@ async fn audit_retains_deleted_message_body_inline_bot_buttons_and_handles_expir
     assert_eq!(text.matches('💰').count(), 2000);
     for call in e.services.calls("sendMessage") {
         assert_eq!(call["chat_id"], 7);
-        assert!(call["parse_mode"].is_null());
+        assert_eq!(call["parse_mode"], "MarkdownV2");
         assert!(call["text"].as_str().unwrap().encode_utf16().count() <= 4096);
         assert!(!call["reply_markup"].to_string().contains("example.invalid"));
     }
