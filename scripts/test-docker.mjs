@@ -27,7 +27,7 @@ writeFileSync(envFile, [
 ].join('\n'), { mode: 0o600 });
 // Keep standard .env discovery inside the isolated temporary project.
 writeFileSync(composeFile, readFileSync(join(root, 'compose.yaml')));
-writeFileSync(override, `services:\n  bot:\n    build:\n      context: ${JSON.stringify(root)}\n    network_mode: none\n`);
+writeFileSync(override, `services:\n  bot:\n    image: ${project}-bot\n    pull_policy: never\n    build:\n      context: ${JSON.stringify(root)}\n    network_mode: none\n`);
 const base = [
   'compose', '--project-name', project,
   '-f', composeFile, '-f', override,
@@ -109,7 +109,7 @@ try {
 } finally {
   try {
     // Cleanup is limited to the randomly named test project and its test data.
-    compose(['down', '--volumes', '--rmi', 'local'], { stream: true });
+    compose(['down', '--volumes', '--rmi', 'all'], { stream: true });
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

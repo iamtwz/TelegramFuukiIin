@@ -42,10 +42,11 @@ Turnstile 使用 Managed 站点，允许域名填写正式 Pages hostname 或自
 
 ## Docker Compose
 
-需要 Docker Compose v2。配置完成后：
+需要 Docker Compose v2。默认使用 `ghcr.io/iamtwz/telegramfuukiiin:latest`，支持 `linux/amd64` 和 `linux/arm64`。配置完成后：
 
 ```sh
-docker compose run --rm --build bot check
+docker compose pull bot
+docker compose run --rm bot check
 docker compose run --rm bot setup-telegram
 docker compose up -d bot
 docker compose logs -f --tail=100 bot
@@ -55,7 +56,9 @@ docker compose logs -f --tail=100 bot
 
 配置统一保存在仓库根目录的 `.env`，Compose 自动读取。
 
-更新代码运行 `docker compose up -d --build bot`；仅修改配置运行 `docker compose up -d bot`。Compose 会按变化重建容器；`restart` 不重新读取配置。
+更新镜像运行 `docker compose up -d --pull always bot`；仅修改配置运行 `docker compose up -d bot`。需要从本地源码构建时，运行 `docker compose build bot`，再运行 `docker compose up -d --pull never bot`。Compose 会按变化重建容器；`restart` 不重新读取配置。
+
+镜像仅在 CI 检查通过后发布：`main` 更新 `latest`，每次发布保留 `sha-<完整提交 SHA>` 标签，`v*` 版本标签另发布对应版本号。发布使用 GitHub Actions 自带的 `GITHUB_TOKEN`，无需额外配置 PAT。首次发布后，维护者需在 GitHub Packages 中将包的可见性设为 Public，才能匿名拉取。
 
 Bot 使用非 root 用户、只读根文件系统，不暴露端口。SQLite 位于 `telegram-fuuki-iin_bot-data` 卷；不要使用 `down -v` 作为重启方式。拥有 Docker 管理权限的人可以读取容器环境，不要公开 `docker inspect` 或展开后的 `docker compose config`。
 

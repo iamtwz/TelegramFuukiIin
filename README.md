@@ -52,8 +52,11 @@ chmod 600 .env
 
 **3. 启动**
 
+默认使用 GHCR 预构建镜像 `ghcr.io/iamtwz/telegramfuukiiin:latest`，支持 AMD64 和 ARM64。
+
 ```sh
-docker compose run --rm --build bot setup-telegram
+docker compose pull bot
+docker compose run --rm bot setup-telegram
 docker compose up -d bot
 ```
 

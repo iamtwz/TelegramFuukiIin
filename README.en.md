@@ -52,8 +52,11 @@ Fill in the bot token, username, OpenRouter key, Pages URL, and Turnstile site/s
 
 **3. Start**
 
+Uses the prebuilt GHCR image `ghcr.io/iamtwz/telegramfuukiiin:latest`, available for AMD64 and ARM64.
+
 ```sh
-docker compose run --rm --build bot setup-telegram
+docker compose pull bot
+docker compose run --rm bot setup-telegram
 docker compose up -d bot
 ```
 
