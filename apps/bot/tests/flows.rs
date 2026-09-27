@@ -1,5 +1,7 @@
 #[path = "flows/admin_audit.rs"]
 mod admin_audit;
+#[path = "flows/admin_navigation.rs"]
+mod admin_navigation;
 #[path = "flows/clock_skew.rs"]
 mod clock_skew;
 #[path = "flows/first_seen.rs"]
@@ -75,6 +77,15 @@ impl Mock {
             .map(|(_, v)| v.clone())
             .collect()
     }
+    fn replies(&self) -> Vec<Value> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _)| matches!(method.as_str(), "sendMessage" | "editMessageText"))
+            .map(|(_, body)| body.clone())
+            .collect()
+    }
     fn member(&self, user: i64, value: Value) {
         self.members.lock().unwrap().insert(user, value);
     }
@@ -92,7 +103,7 @@ impl Services for Mock {
         Ok(self.verdict.lock().unwrap().clone().unwrap_or_else(|| json!({"success":token.starts_with("valid-"),"hostname":"verify.example.com","action":"join","cdata":token.strip_prefix("valid-").unwrap_or("")})))
     }
     async fn telegram(&self, method: &str, body: Value) -> Result<Value> {
-        if method == "sendMessage" {
+        if matches!(method, "sendMessage" | "editMessageText") {
             formatting::rendered(&body);
         }
         self.calls
@@ -409,7 +420,7 @@ async fn review_requires_current_admin_permissions_and_first_decision_wins() {
     e.message(CHAT, &message(1)).unwrap();
     drain(&e).await;
     let id = cases(&e)[0].id.clone();
-    let callback = json!({"callback_query":{"id":"cb","from":{"id":7},"message":{"chat":{"id":7,"type":"private"}},"data":format!("ban|{CHAT}|{id}")}});
+    let callback = json!({"callback_query":{"id":"cb","from":{"id":7},"message":{"message_id":777,"chat":{"id":7,"type":"private"}},"data":format!("ban|{CHAT}|{id}")}});
     admin::handle(&e, CHAT, &callback).await.unwrap();
     assert_eq!(cases(&e)[0].state, "review");
     e.services.member(
@@ -430,7 +441,7 @@ fn admin_message(user: i64, text: &str) -> Value {
     json!({"message":{"message_id":1000,"chat":{"id":user,"type":"private"},"from":{"id":user},"text":text}})
 }
 fn admin_callback(user: i64, chat: i64, action: &str, id: &str) -> Value {
-    json!({"callback_query":{"id":"super-admin-test","from":{"id":user},"message":{"chat":{"id":user,"type":"private"}},"data":format!("{action}|{chat}|{id}")}})
+    json!({"callback_query":{"id":"super-admin-test","from":{"id":user},"message":{"message_id":777,"chat":{"id":user,"type":"private"}},"data":format!("{action}|{chat}|{id}")}})
 }
 
 fn has_admin_menu(call: &Value) -> bool {
@@ -782,13 +793,21 @@ fn assert_reply_language(e: &Engine<Mock>, bilingual: bool, recipient: Option<i6
         if recipient.is_some_and(|id| body["chat_id"] != id) {
             continue;
         }
-        if method == "sendMessage" || method == "answerCallbackQuery" {
-            if method == "sendMessage" && formatting::rendered(body) == "Pong! 🏓" {
-                continue;
-            }
-            text(&body["text"], bilingual);
+        if matches!(
+            method.as_str(),
+            "sendMessage" | "editMessageText" | "answerCallbackQuery"
+        ) {
             if method == "answerCallbackQuery" {
-                assert!(body["text"].as_str().unwrap().chars().count() <= 200);
+                if body["text"].is_string() {
+                    text(&body["text"], bilingual);
+                    assert!(body["text"].as_str().unwrap().chars().count() <= 200);
+                }
+            } else {
+                let display = formatting::rendered(body);
+                if display == "Pong! 🏓" {
+                    continue;
+                }
+                text(&json!(display), bilingual);
             }
             for key in ["inline_keyboard", "keyboard"] {
                 if let Some(rows) = body["reply_markup"][key].as_array() {
@@ -844,12 +863,14 @@ async fn super_admin_can_read_all_configured_groups_without_group_admin_status()
     admin::handle(&e, CHAT, &admin_message(7, &format!("/case {CHAT} {id}")))
         .await
         .unwrap();
-    let replies = e.services.calls("sendMessage");
+    assert_eq!(e.services.calls("sendMessage").len(), 10);
+    assert_eq!(e.services.calls("editMessageText").len(), 8);
+    let replies = e.services.replies();
     assert_eq!(replies.len(), 18);
     assert!(replies.iter().all(|reply| reply["chat_id"] == 7));
     let texts = replies
         .iter()
-        .map(|r| r["text"].as_str().unwrap())
+        .map(formatting::rendered)
         .collect::<Vec<_>>()
         .join("\n");
     assert!(texts.contains("Hello"));
@@ -901,10 +922,7 @@ async fn super_admin_read_access_does_not_bypass_mutation_permissions() {
         .await
         .unwrap();
     assert!(
-        e.services.calls("sendMessage").last().unwrap()["text"]
-            .as_str()
-            .unwrap()
-            .contains("Hello")
+        formatting::rendered(e.services.calls("sendMessage").last().unwrap()).contains("Hello")
     );
     admin::handle(&e, CHAT, &admin_callback(7, CHAT, "ban", &id))
         .await
@@ -1215,7 +1233,7 @@ async fn ordinary_private_messages_do_not_reveal_a_service_introduction() {
     drain(&e).await;
     let replies = e.services.calls("sendMessage");
     assert_eq!(replies.len(), 1);
-    let help = replies[0]["text"].as_str().unwrap();
+    let help = formatting::rendered(&replies[0]);
     assert!(help.contains("/ping") && help.contains("/whoami") && help.contains("/version"));
     for internal in [
         "/admin",

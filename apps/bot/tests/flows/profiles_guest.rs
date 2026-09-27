@@ -29,7 +29,7 @@ fn bans(e: &Engine<Mock>) -> Vec<i64> {
 }
 fn text(e: &Engine<Mock>) -> String {
     e.services
-        .calls("sendMessage")
+        .replies()
         .iter()
         .map(super::formatting::rendered)
         .collect::<Vec<_>>()
@@ -590,7 +590,11 @@ async fn profile_screening_disabled_does_not_skip_message_profile_and_captcha_di
 #[tokio::test]
 async fn profile_and_guest_evidence_is_visible_in_authorized_audit_snapshot() {
     let (e, _) = setup(Some(0.7));
-    profile(&e, USER, "t.me/audit_bio @audit_contact");
+    profile(
+        &e,
+        USER,
+        &format!("t.me/audit_bio @audit_contact {}", "证".repeat(3500)),
+    );
     e.services.member(7, json!({"status":"creator"}));
     e.message(CHAT, &guest(2, USER)).unwrap();
     drain(&e).await;
@@ -603,6 +607,7 @@ async fn profile_and_guest_evidence_is_visible_in_authorized_audit_snapshot() {
         .iter()
         .find(|r| r.action == "classified")
         .unwrap();
+    e.services.calls.lock().unwrap().clear();
     admin::handle(
         &e,
         CHAT,
@@ -610,17 +615,51 @@ async fn profile_and_guest_evidence_is_visible_in_authorized_audit_snapshot() {
     )
     .await
     .unwrap();
-    let output = text(&e);
-    assert!(output.contains("Guest Bot 召唤者"));
-    assert!(output.contains("t.me/audit_bio"));
-    assert!(output.contains("@audit_contact"));
-    assert!(
-        e.services.calls("sendMessage").iter().all(|m| m["text"]
-            .as_str()
+    for _ in 0..100 {
+        let reply = e.services.replies().last().unwrap().clone();
+        let next = reply["reply_markup"]["inline_keyboard"]
+            .as_array()
             .unwrap()
-            .encode_utf16()
-            .count()
-            <= 4096)
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .find(|button| button["text"] == "下一页")
+            .map(|button| button["callback_data"].as_str().unwrap().to_owned());
+        let Some(next) = next else { break };
+        let mut parts = next.split('|');
+        let action = parts.next().unwrap();
+        let chat = parts.next().unwrap().parse().unwrap();
+        let cursor = parts.next().unwrap();
+        admin::handle(&e, chat, &admin_callback(7, chat, action, cursor))
+            .await
+            .unwrap();
+    }
+    assert!(e.services.calls("sendMessage").is_empty());
+    assert!(e.services.calls("editMessageText").len() > 1);
+    assert!(
+        e.services
+            .calls("editMessageText")
+            .iter()
+            .all(|reply| { reply["chat_id"] == 7 && reply["message_id"] == 777 })
+    );
+    let output = text(&e);
+    for expected in [
+        "Guest Bot 召唤者",
+        "t.me/audit_bio",
+        "@audit_contact",
+        "guest_bot",
+        "一天八万",
+        "https://t.me/spam_channel",
+        "💰",
+    ] {
+        assert!(output.contains(expected), "missing {expected}");
+    }
+    assert_eq!(output.matches('证').count(), 3500);
+    assert!(!output.contains("must-not-leak"));
+    assert!(
+        e.services
+            .replies()
+            .iter()
+            .all(|m| formatting::rendered(m).encode_utf16().count() <= 4096)
     );
 }
 

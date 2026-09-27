@@ -1,6 +1,7 @@
 //! Daily statistics use a fixed UTC+8 boundary, independent of the host timezone.
 use crate::{
     admin::button,
+    admin_view::AdminReply,
     api::Services,
     chat_info,
     engine::Engine,
@@ -97,7 +98,12 @@ fn amount(sum: i64, known: i64, attempts: i64) -> String {
 }
 
 /// Daily view by default; dates are canonical YYYY-MM-DD or internal period cursors.
-pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -> Result<()> {
+pub async fn show<S: Services>(
+    e: &Engine<S>,
+    chat: i64,
+    reply: AdminReply,
+    raw: &str,
+) -> Result<()> {
     let today = day(e.now());
     let parsed = if raw.is_empty() {
         Some((1, today))
@@ -115,15 +121,15 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
     let Some((span, end)) =
         parsed.filter(|(_, end)| (today - RETENTION_DAYS + 1..=today).contains(end))
     else {
-        return e
+        return reply
             .send_markdown(
-                user,
+                e,
                 &format!(
                     "日期无效，请使用最近 {} 天内的日期：{}",
                     code("365"),
                     code("/stats 群ID YYYY-MM-DD")
                 ),
-                Value::Null,
+                json!({"inline_keyboard":[[button(chat, "返回上一级", "panel", "")]]}),
             )
             .await;
     };
@@ -252,8 +258,9 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
     ]));
     rows.push(json!([
         button(chat, "刷新", "stats", &format!("{period}:{end}")),
-        button(chat, "管理面板", "panel", "")
+        button(chat, "返回上一级", "panel", "")
     ]));
-    e.send_markdown(user, &text, json!({"inline_keyboard":rows}))
+    reply
+        .send_markdown(e, &text, json!({"inline_keyboard":rows}))
         .await
 }

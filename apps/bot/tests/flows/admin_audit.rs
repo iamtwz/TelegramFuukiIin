@@ -5,7 +5,7 @@ use fuuki_iin_bot::{
 };
 
 fn last_reply(e: &Engine<Mock>) -> Value {
-    e.services.calls("sendMessage").last().unwrap().clone()
+    e.services.replies().last().unwrap().clone()
 }
 fn callback_data(reply: &Value, label: &str) -> String {
     reply["reply_markup"]["inline_keyboard"]
@@ -28,7 +28,7 @@ async fn click(e: &Engine<Mock>, data: &str) {
 }
 fn texts(e: &Engine<Mock>) -> String {
     e.services
-        .calls("sendMessage")
+        .replies()
         .iter()
         .map(super::formatting::rendered)
         .collect::<Vec<_>>()
@@ -220,14 +220,12 @@ async fn audit_buttons_navigate_filter_refresh_and_reject_bad_cursors() {
     assert!(texts(&e).contains("第 1/3 页"));
     let first = last_reply(&e);
     click(&e, &callback_data(&first, "下一页")).await;
-    assert!(
-        last_reply(&e)["text"]
-            .as_str()
-            .unwrap()
-            .contains("第 2/3 页")
-    );
+    assert!(formatting::rendered(&last_reply(&e)).contains("第 2/3 页"));
     click(&e, &callback_data(&last_reply(&e), "上一页")).await;
-    assert_eq!(last_reply(&e)["text"], first["text"]);
+    assert_eq!(
+        formatting::rendered(&last_reply(&e)),
+        formatting::rendered(&first)
+    );
     e.audit(
         CHAT,
         "settings_changed",
@@ -237,20 +235,10 @@ async fn audit_buttons_navigate_filter_refresh_and_reject_bad_cursors() {
     )
     .unwrap();
     click(&e, &callback_data(&last_reply(&e), "设置变更")).await;
-    assert!(
-        last_reply(&e)["text"]
-            .as_str()
-            .unwrap()
-            .contains("暂无此类型")
-    );
+    assert!(formatting::rendered(&last_reply(&e)).contains("暂无此类型"));
     click(&e, &callback_data(&last_reply(&e), "刷新")).await;
-    assert!(
-        last_reply(&e)["text"]
-            .as_str()
-            .unwrap()
-            .contains("settings-detail")
-    );
-    assert!(!last_reply(&e)["text"].as_str().unwrap().contains("p=0.1"));
+    assert!(formatting::rendered(&last_reply(&e)).contains("settings-detail"));
+    assert!(!formatting::rendered(&last_reply(&e)).contains("p=0.1"));
     for invalid in [
         "bad",
         "x:1:0",
@@ -263,17 +251,16 @@ async fn audit_buttons_navigate_filter_refresh_and_reject_bad_cursors() {
         admin::handle(&e, CHAT, &admin_callback(7, CHAT, "audit", invalid))
             .await
             .unwrap();
-        assert!(
-            last_reply(&e)["text"]
-                .as_str()
-                .unwrap()
-                .contains("分页参数无效")
-        );
+        assert!(formatting::rendered(&last_reply(&e)).contains("分页参数无效"));
     }
-    for call in e.services.calls("sendMessage") {
-        assert!(call["text"].as_str().unwrap().encode_utf16().count() <= 4096);
+    for call in e.services.replies() {
+        assert!(formatting::rendered(&call).encode_utf16().count() <= 4096);
         if let Some(rows) = call["reply_markup"]["inline_keyboard"].as_array() {
-            for b in rows.iter().flat_map(|r| r.as_array().unwrap()) {
+            for b in rows
+                .iter()
+                .flat_map(|r| r.as_array().unwrap())
+                .filter(|button| button["callback_data"].is_string())
+            {
                 assert!(b["callback_data"].as_str().unwrap().len() <= 64);
                 assert!(!b["text"].as_str().unwrap().contains(" / "));
             }
@@ -317,6 +304,19 @@ async fn audit_retains_deleted_message_body_inline_bot_buttons_and_handles_expir
     admin::handle(&e, CHAT, &admin_callback(7, CHAT, "auditentry", &id))
         .await
         .unwrap();
+    for _ in 0..100 {
+        let next = last_reply(&e)["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .find(|button| button["text"] == "下一页")
+            .map(|button| button["callback_data"].as_str().unwrap().to_owned());
+        let Some(next) = next else { break };
+        click(&e, &next).await;
+    }
+    assert!(e.services.calls("sendMessage").is_empty());
+    assert!(e.services.calls("editMessageText").len() > 1);
     let text = texts(&e);
     for part in [
         "原消息快照",
@@ -333,12 +333,39 @@ async fn audit_retains_deleted_message_body_inline_bot_buttons_and_handles_expir
         assert!(text.contains(part), "missing {part}");
     }
     assert_eq!(text.matches('💰').count(), 2000);
-    for call in e.services.calls("sendMessage") {
+    for call in e.services.replies() {
         assert_eq!(call["chat_id"], 7);
+        assert_eq!(call["message_id"], 777);
         assert_eq!(call["parse_mode"], "MarkdownV2");
-        assert!(call["text"].as_str().unwrap().encode_utf16().count() <= 4096);
+        assert!(formatting::rendered(&call).encode_utf16().count() <= 4096);
         assert!(!call["reply_markup"].to_string().contains("example.invalid"));
+        for button in call["reply_markup"]["inline_keyboard"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row.as_array().unwrap())
+            .filter(|button| button["callback_data"].is_string())
+        {
+            assert!(button["callback_data"].as_str().unwrap().len() <= 64);
+        }
     }
+    let back = last_reply(&e)["reply_markup"]["inline_keyboard"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap())
+        .find(|button| {
+            button["callback_data"]
+                .as_str()
+                .is_some_and(|data| data.starts_with("audit|"))
+        })
+        .unwrap()["callback_data"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    click(&e, &back).await;
+    assert_eq!(last_reply(&e)["message_id"], 777);
+    assert!(e.services.calls("sendMessage").is_empty());
     time.fetch_add(604_801, Ordering::SeqCst);
     e.store.prune(e.now()).unwrap();
     e.services.calls.lock().unwrap().clear();

@@ -136,7 +136,7 @@ impl Markdown<'_> {
 pub fn rendered(body: &Value) -> String {
     assert_eq!(body["parse_mode"], "MarkdownV2");
     let mut parser = Markdown {
-        rest: body["text"].as_str().expect("sendMessage text"),
+        rest: body["text"].as_str().expect("message text"),
     };
     let text = parser.render();
     assert!(
@@ -268,8 +268,11 @@ async fn admin_group_names_are_escaped_in_messages_and_plain_in_buttons() {
     admin::handle(&e, CHAT, &admin_callback(7, CHAT, "panel", ""))
         .await
         .unwrap();
-    let replies = e.services.calls("sendMessage");
+    assert_eq!(e.services.calls("sendMessage").len(), 1);
+    assert_eq!(e.services.calls("editMessageText").len(), 1);
+    let replies = e.services.replies();
     assert_eq!(replies.len(), 2);
+    assert_eq!(replies[1]["message_id"], 777);
     for reply in &replies {
         assert!(rendered(reply).contains(&format!("{title} · {CHAT}")));
         assert!(

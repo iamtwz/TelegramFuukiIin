@@ -1,5 +1,6 @@
 use crate::{
     admin::button,
+    admin_view::{AdminReply, text_pages},
     api::Services,
     audit::{Cursor, Filter},
     chat_info,
@@ -20,10 +21,19 @@ fn excerpt(text: &str, limit: usize) -> String {
     }
 }
 
-pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -> Result<()> {
+pub async fn show<S: Services>(
+    e: &Engine<S>,
+    chat: i64,
+    reply: AdminReply,
+    raw: &str,
+) -> Result<()> {
     let Some(cursor) = Cursor::parse(raw) else {
-        return e
-            .send(user, "分页参数无效，请重新打开审计记录。", Value::Null)
+        return reply
+            .send(
+                e,
+                "分页参数无效，请重新打开审计记录。",
+                detail_navigation(chat),
+            )
             .await;
     };
     let page = e.store.audit_page(chat, cursor)?;
@@ -61,7 +71,7 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
             chat,
             &format!("#{} · {label}", entry.id),
             "auditentry",
-            &entry.id.to_string()
+            &format!("{}:0", entry.id)
         )]));
     }
     if page.total == 0 {
@@ -131,50 +141,34 @@ pub async fn show<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -
             }
             .encode()
         ),
-        button(chat, "管理面板", "panel", "")
+        button(chat, "返回上一级", "panel", "")
     ]));
-    e.send_markdown(user, &text, json!({"inline_keyboard":rows}))
+    reply
+        .send_markdown(e, &text, json!({"inline_keyboard":rows}))
         .await
 }
 
-/// Split raw evidence before adding complete Markdown code blocks to each part.
-/// Count UTF-16 units and the extra escapes needed inside a code block.
-fn evidence_parts(text: &str, limit: usize) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0;
-    let mut length = 0;
-    for (offset, ch) in text.char_indices() {
-        let cost = ch.len_utf16() + usize::from(matches!(ch, '`' | '\\'));
-        if length + cost > limit {
-            parts.push(&text[start..offset]);
-            start = offset;
-            length = 0;
-        }
-        length += cost;
-    }
-    if start < text.len() {
-        parts.push(&text[start..]);
-    }
-    parts
+const DETAIL_TEXT_LIMIT: usize = 4096;
+const DETAIL_PAGE_LIMIT: usize = 3000;
+
+fn detail_text(id: i64, page: usize, pages: usize, raw: &str) -> String {
+    let heading = format!("审计 #{id} · 第 {page}/{pages} 页");
+    debug_assert!(
+        heading.encode_utf16().count() + 2 + raw.encode_utf16().count() <= DETAIL_TEXT_LIMIT
+    );
+    format!("{}\n\n{}", bold(&heading), pre(raw))
 }
 
-async fn send_parts<S: Services>(
-    e: &Engine<S>,
-    user: i64,
-    heading: &str,
-    text: &str,
-) -> Result<()> {
-    let parts = evidence_parts(text, 1200);
-    let total = parts.len();
-    for (i, part) in parts.into_iter().enumerate() {
-        e.send_markdown(
-            user,
-            &format!("{heading}\n（{}/{total}）\n{}", i + 1, pre(part)),
-            Value::Null,
-        )
-        .await?;
-    }
-    Ok(())
+fn detail_cursor(raw: &str) -> Option<(i64, u32)> {
+    let (id, page) = raw.split_once(':').unwrap_or((raw, "0"));
+    Some((id.parse().ok().filter(|id| *id > 0)?, page.parse().ok()?))
+}
+
+fn detail_navigation(chat: i64) -> Value {
+    json!({"inline_keyboard":[[
+        button(chat, "返回审计记录", "audit", ""),
+        button(chat, "管理面板", "panel", "")
+    ]]})
 }
 
 fn identity(value: &Value) -> String {
@@ -248,25 +242,27 @@ fn snapshot(evidence: &Value) -> Result<String> {
     Ok(out)
 }
 
-pub async fn detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str) -> Result<()> {
-    let entry = match raw.parse::<i64>().ok().filter(|id| *id > 0) {
-        Some(id) => e.store.audit_entry(chat, id)?,
-        None => None,
-    };
-    let Some(entry) = entry else {
-        return e
-            .send(user, "记录不存在或已过保留期限。", Value::Null)
+pub async fn detail<S: Services>(
+    e: &Engine<S>,
+    chat: i64,
+    reply: AdminReply,
+    raw: &str,
+) -> Result<()> {
+    let Some((id, requested_page)) = detail_cursor(raw) else {
+        return reply
+            .send(e, "记录不存在或已过保留期限。", detail_navigation(chat))
             .await;
     };
-    let group = chat_info::markdown_label(e, chat).await?;
-    let heading = format!(
-        "{} {} · {}\n{group}",
-        bold("审计"),
-        code(&format!("#{}", entry.id)),
-        bold(&excerpt(entry.label(), 60))
-    );
-    let text = format!(
-        "时间：{} UTC\n目标：{}\n操作人：{}\n详情：{}",
+    let Some(entry) = e.store.audit_entry(chat, id)? else {
+        return reply
+            .send(e, "记录不存在或已过保留期限。", detail_navigation(chat))
+            .await;
+    };
+    let group = chat_info::label(e, chat).await?;
+    let mut text = format!(
+        "审计 #{} · {}\n{group}\n\n时间：{} UTC\n目标：{}\n操作人：{}\n详情：{}",
+        entry.id,
+        excerpt(entry.label(), 60),
         entry.time,
         entry.target,
         entry
@@ -278,58 +274,69 @@ pub async fn detail<S: Services>(e: &Engine<S>, chat: i64, user: i64, raw: &str)
             &entry.detail
         }
     );
-    send_parts(e, user, &heading, &text).await?;
-    let Some(id) = entry.case_id() else {
-        return Ok(());
-    };
-    let Some(case) = e.store.get::<Case>(chat, &format!("case:{id}"))? else {
-        return e
-            .send(
-                user,
-                "关联案件已过保留期限，原消息快照不可用。",
-                Value::Null,
-            )
-            .await;
-    };
-    let probability = case
-        .probability
-        .map_or_else(|| "未取得评分".into(), |p| format!("{:.1}%", p * 100.0));
-    let text = format!(
-        "{}\n案件：{}\n用户 ID：{}\n垃圾消息概率：{}\n原消息快照：检测时保存的正文、按钮和可见信息，不包含媒体文件。",
-        bold("案件详情"),
-        code(&case.id),
-        code(&case.user.to_string()),
-        code(&probability)
-    );
-    let markup = if case.kind == CaseKind::JoinProfile {
-        Value::Null
-    } else {
-        chat.to_string().strip_prefix("-100").map_or(Value::Null, |id| json!({"inline_keyboard":[[{"text":"在群中打开（已删消息可能无法打开）","url":format!("https://t.me/c/{id}/{}", case.message)}]]}))
-    };
-    e.send_markdown(user, &text, markup).await?;
-    match case.evidence {
-        Some(evidence) => {
-            send_parts(
-                e,
-                user,
-                &format!(
-                    "{} · {}",
-                    bold("原消息快照"),
-                    code(&format!("审计 #{}", entry.id))
-                ),
-                &snapshot(&evidence)?,
-            )
-            .await
-        }
-        None => {
-            e.send(
-                user,
-                "原消息快照已按保留策略清理；审计记录仍可查看。",
-                Value::Null,
-            )
-            .await
+    let mut original_message = None;
+    if let Some(id) = entry.case_id() {
+        if let Some(case) = e.store.get::<Case>(chat, &format!("case:{id}"))? {
+            let probability = case
+                .probability
+                .map_or_else(|| "未取得评分".into(), |p| format!("{:.1}%", p * 100.0));
+            text.push_str(&format!(
+                "\n\n案件：{}\n用户 ID：{}\n垃圾消息概率：{probability}\n原消息快照：检测时保存的正文、按钮和可见信息，不包含媒体文件。",
+                case.id, case.user
+            ));
+            if case.kind != CaseKind::JoinProfile
+                && let Some(id) = chat.to_string().strip_prefix("-100")
+            {
+                original_message = Some(json!({
+                    "text":"在群中打开（已删消息可能无法打开）",
+                    "url":format!("https://t.me/c/{id}/{}", case.message)
+                }));
+            }
+            match case.evidence {
+                Some(evidence) => {
+                    text.push_str("\n\n原消息快照：\n");
+                    text.push_str(&snapshot(&evidence)?);
+                }
+                None => text.push_str("\n\n原消息快照已按保留策略清理；审计记录仍可查看。"),
+            }
+        } else {
+            text.push_str("\n\n关联案件已过保留期限，原消息快照不可用。");
         }
     }
+    let pages = text_pages(&text, DETAIL_PAGE_LIMIT);
+    let page = (requested_page as usize).min(pages.len() - 1);
+    let text = detail_text(entry.id, page + 1, pages.len(), pages[page]);
+    let mut rows = vec![];
+    let mut navigation = vec![];
+    if page > 0 {
+        navigation.push(button(
+            chat,
+            "上一页",
+            "auditentry",
+            &format!("{}:{}", entry.id, page - 1),
+        ));
+    }
+    if page + 1 < pages.len() {
+        navigation.push(button(
+            chat,
+            "下一页",
+            "auditentry",
+            &format!("{}:{}", entry.id, page + 1),
+        ));
+    }
+    if !navigation.is_empty() {
+        rows.push(json!(navigation));
+    }
+    if let Some(button) = original_message {
+        rows.push(json!([button]));
+    }
+    rows.push(json!([
+        button(chat, "返回审计记录", "audit", ""),
+        button(chat, "管理面板", "panel", "")
+    ]));
+    reply
+        .send_markdown(e, &text, json!({"inline_keyboard":rows}))
+        .await
 }
 
 #[cfg(test)]
@@ -337,16 +344,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evidence_parts_preserve_emoji_backticks_and_backslashes() {
-        let evidence = "正文💰`\\```[链接](https://example.invalid)\n".repeat(200);
-        let parts = evidence_parts(&evidence, 1200);
-        assert!(parts.len() > 1);
-        assert_eq!(parts.concat(), evidence);
-        for part in parts {
-            let block = pre(part);
-            assert!(block.encode_utf16().count() <= 1208);
-            assert!(block.starts_with("```\n"));
-            assert!(block.ends_with("\n```"));
+    fn detail_pagination_preserves_complete_unicode_evidence() {
+        let text = format!(
+            "{}💰正文{}结尾\n{}",
+            "a".repeat(DETAIL_PAGE_LIMIT - 1),
+            "💰".repeat(2000),
+            "汉字".repeat(2000)
+        );
+        let pages = text_pages(&text, DETAIL_PAGE_LIMIT);
+        assert!(pages.len() > 1);
+        assert_eq!(pages.concat(), text);
+        assert_eq!(pages[0].len(), DETAIL_PAGE_LIMIT - 1);
+        assert!(pages[1].starts_with('💰'));
+        for (index, page) in pages.iter().enumerate() {
+            assert!(page.encode_utf16().count() <= DETAIL_PAGE_LIMIT);
+            let wire = detail_text(i64::MAX, index + 1, pages.len(), page);
+            let heading = format!("审计 #{} · 第 {}/{} 页", i64::MAX, index + 1, pages.len());
+            assert!(wire.starts_with(&bold(&heading)));
+            assert!(wire.ends_with(&pre(page)));
+            assert!(
+                heading.encode_utf16().count() + 2 + page.encode_utf16().count()
+                    <= DETAIL_TEXT_LIMIT
+            );
         }
+        assert_eq!(text_pages("", DETAIL_PAGE_LIMIT), vec![""]);
+    }
+
+    #[test]
+    fn detail_cursors_keep_legacy_ids_and_fit_callback_size_limits() {
+        assert_eq!(detail_cursor("42"), Some((42, 0)));
+        assert_eq!(detail_cursor("42:3"), Some((42, 3)));
+        assert_eq!(
+            detail_cursor(&format!("{}:{}", i64::MAX, u32::MAX)),
+            Some((i64::MAX, u32::MAX))
+        );
+        for raw in [
+            "",
+            "0",
+            "-1",
+            "42:",
+            "42:-1",
+            "42:x",
+            "42:0:extra",
+            "42:4294967296",
+        ] {
+            assert_eq!(detail_cursor(raw), None, "accepted {raw}");
+        }
+        let callback = button(
+            i64::MIN,
+            "下一页",
+            "auditentry",
+            &format!("{}:{}", i64::MAX, u32::MAX),
+        );
+        assert!(callback["callback_data"].as_str().unwrap().len() <= 64);
+    }
+
+    #[test]
+    fn detail_pages_preserve_backticks_and_backslashes_before_markdown_formatting() {
+        let evidence = "正文💰`\\```[链接](https://example.invalid)\n".repeat(200);
+        let pages = text_pages(&evidence, DETAIL_PAGE_LIMIT);
+        assert!(pages.len() > 1);
+        assert_eq!(pages.concat(), evidence);
+        for page in pages {
+            let block = pre(page);
+            let mut encoded = block
+                .strip_prefix("```\n")
+                .unwrap()
+                .strip_suffix("\n```")
+                .unwrap()
+                .chars();
+            let mut decoded = String::new();
+            while let Some(character) = encoded.next() {
+                if character == '\\' {
+                    let escaped = encoded.next().unwrap();
+                    assert!(matches!(escaped, '\\' | '`'));
+                    decoded.push(escaped);
+                } else {
+                    decoded.push(character);
+                }
+            }
+            assert_eq!(decoded, page);
+            assert!(page.encode_utf16().count() <= DETAIL_PAGE_LIMIT);
+        }
+        let escape_heavy = "`\\".repeat(1500);
+        let wire = detail_text(i64::MAX, 1, 1, &escape_heavy);
+        assert!(wire.encode_utf16().count() > DETAIL_TEXT_LIMIT);
+        assert!(escape_heavy.encode_utf16().count() <= DETAIL_PAGE_LIMIT);
     }
 }

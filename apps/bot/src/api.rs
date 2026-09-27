@@ -117,6 +117,46 @@ impl Api {
         };
         Ok(Classification { decision, usage })
     }
+    async fn telegram_at(&self, method: &str, url: &str, body: Value) -> Result<Value> {
+        let (status, data) = self
+            .post(
+                method,
+                url,
+                body,
+                false,
+                if method == "getUpdates" { 35 } else { 8 },
+            )
+            .await?;
+        if (200..300).contains(&status) && data["ok"] == true {
+            return Ok(data["result"].clone());
+        }
+        let desc = data["description"].as_str().unwrap_or("").to_lowercase();
+        let code = data["error_code"].as_u64().unwrap_or(u64::from(status));
+        // Telegram rejects an identical edit even though the desired view is current.
+        if method == "editMessageText"
+            && status == 400
+            && code == 400
+            && data["ok"] == false
+            && desc.contains("message is not modified")
+        {
+            return Ok(json!(true));
+        }
+        if (method == "deleteMessage" && desc.contains("message to delete not found"))
+            || (method == "answerCallbackQuery"
+                && (desc.contains("query is too old") || desc.contains("query id is invalid")))
+        {
+            return Ok(json!(true));
+        }
+        Err(Error::External {
+            code: format!("telegram_{method}_{code}"),
+            retry_after: data["parameters"]["retry_after"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(3600),
+            permanent: (400..500).contains(&code) && code != 429,
+        })
+    }
+
     async fn post(
         &self,
         method: &str,
@@ -214,34 +254,12 @@ impl Services for Api {
         .await
     }
     async fn telegram(&self, method: &str, body: Value) -> Result<Value> {
-        let (status, data) = self
-            .post(
-                method,
-                &format!("https://api.telegram.org/bot{}/{method}", self.token),
-                body,
-                false,
-                if method == "getUpdates" { 35 } else { 8 },
-            )
-            .await?;
-        if (200..300).contains(&status) && data["ok"] == true {
-            return Ok(data["result"].clone());
-        }
-        let desc = data["description"].as_str().unwrap_or("").to_lowercase();
-        if (method == "deleteMessage" && desc.contains("message to delete not found"))
-            || (method == "answerCallbackQuery"
-                && (desc.contains("query is too old") || desc.contains("query id is invalid")))
-        {
-            return Ok(json!(true));
-        }
-        let code = data["error_code"].as_u64().unwrap_or(u64::from(status));
-        Err(Error::External {
-            code: format!("telegram_{method}_{code}"),
-            retry_after: data["parameters"]["retry_after"]
-                .as_u64()
-                .unwrap_or(0)
-                .min(3600),
-            permanent: (400..500).contains(&code) && code != 429,
-        })
+        self.telegram_at(
+            method,
+            &format!("https://api.telegram.org/bot{}/{method}", self.token),
+            body,
+        )
+        .await
     }
     async fn classify(&self, evidence: &Value) -> Result<Classification> {
         self.classify_at("https://openrouter.ai/api/alpha/decisions", evidence)
@@ -275,6 +293,131 @@ mod tests {
         io::{BufRead, BufReader, Read, Write},
         net::TcpListener,
     };
+
+    fn telegram_fixture(
+        method: &str,
+        status: u16,
+        response: Value,
+    ) -> (String, std::thread::JoinHandle<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/{method}", listener.local_addr().unwrap());
+        let request_path = format!("POST /{method} HTTP/1.1");
+        let body = response.to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            assert_eq!(line.trim_end(), request_path);
+            let mut length = 0;
+            loop {
+                line.clear();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            let request = serde_json::from_slice(&bytes).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            request
+        });
+        (url, server)
+    }
+
+    fn loopback_api() -> Api {
+        let logger = Arc::new(Logger::with_writer(LogLevel::Info, &[], std::io::sink()));
+        let mut api = Api::new(
+            "synthetic-token".into(),
+            "synthetic-key".into(),
+            "synthetic-model".into(),
+            "synthetic-turnstile-secret".into(),
+            logger,
+        )
+        .unwrap();
+        api.client = reqwest::Client::builder().no_proxy().build().unwrap();
+        api
+    }
+
+    #[tokio::test]
+    async fn repeated_admin_refresh_succeeds_when_telegram_reports_an_unchanged_edit() {
+        let api = loopback_api();
+        let request = json!({
+            "chat_id":42,"message_id":100,"text":"管理面板",
+            "link_preview_options":{"is_disabled":true},
+            "reply_markup":{"inline_keyboard":[]}
+        });
+        for (status, response, expected) in [
+            (
+                200,
+                json!({"ok":true,"result":{"message_id":100,"text":"管理面板"}}),
+                json!({"message_id":100,"text":"管理面板"}),
+            ),
+            (
+                400,
+                json!({"ok":false,"error_code":400,"description":"Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message"}),
+                json!(true),
+            ),
+        ] {
+            let (url, server) = telegram_fixture("editMessageText", status, response);
+            let result = api
+                .telegram_at("editMessageText", &url, request.clone())
+                .await;
+            assert_eq!(server.join().unwrap(), request);
+            assert_eq!(result.unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_edit_exception_does_not_hide_other_telegram_failures() {
+        let api = loopback_api();
+        for (method, status, code, description) in [
+            (
+                "editMessageText",
+                400,
+                400,
+                "Bad Request: message to edit not found",
+            ),
+            (
+                "editMessageText",
+                400,
+                400,
+                "Bad Request: message can't be edited",
+            ),
+            (
+                "sendMessage",
+                400,
+                400,
+                "Bad Request: message is not modified",
+            ),
+            ("editMessageText", 500, 500, "message is not modified"),
+        ] {
+            let (url, server) = telegram_fixture(
+                method,
+                status,
+                json!({"ok":false,"error_code":code,"description":description}),
+            );
+            let result = api
+                .telegram_at(method, &url, json!({"chat_id":42,"message_id":100}))
+                .await;
+            server.join().unwrap();
+            let error = result.unwrap_err();
+            assert_eq!(error.to_string(), format!("telegram_{method}_{code}"));
+            assert_eq!(error.permanent(), code == 400);
+        }
+    }
 
     #[tokio::test]
     async fn decisions_report_usage_even_when_status_or_probability_is_invalid() {
