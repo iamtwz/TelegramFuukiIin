@@ -11,6 +11,8 @@ mod profiles_guest;
 #[path = "flows/statistics.rs"]
 mod statistics;
 mod support;
+#[path = "flows/verbose.rs"]
+mod verbose;
 
 use fuuki_iin_bot::{
     admin,
@@ -173,6 +175,7 @@ fn setup(p: Option<f64>) -> (Engine<Mock>, Arc<AtomicI64>) {
                 verification_url: "https://verify.example.com".into(),
                 bot_username: "FuukiIinTestBot".into(),
                 chats: vec![CHAT],
+                verbose_chats: vec![],
                 super_admins: vec![],
                 database: "data/test.sqlite".into(),
                 jev_model: "test-model".into(),

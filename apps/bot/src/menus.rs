@@ -83,12 +83,11 @@ pub async fn install_public<S: Services>(services: &S, config: &Config) -> Resul
         .await?;
     }
     for chat in &config.chats {
-        set_scope(
-            services,
-            json!({"type":"chat","chat_id":chat}),
-            command_list(false, false),
-        )
-        .await?;
+        let mut commands = command_list(false, false);
+        if config.is_verbose(*chat) {
+            commands.push(json!({"command":"spamcheck","description":"Jev 判断 / Jev evaluation"}));
+        }
+        set_scope(services, json!({"type":"chat","chat_id":chat}), commands).await?;
     }
     Ok(())
 }

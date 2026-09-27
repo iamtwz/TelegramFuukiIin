@@ -19,6 +19,7 @@ TelegramFuukiIin (Chinese name: **Telegram 风纪委员**) is an open-source Tel
 - **Multi-group administration:** manage groups, adjust rules, and review cases in a private Telegram chat. Access is granted per group, super admins can view all configured groups, and management menus stay hidden from ordinary users.
 - **Traceable decisions:** review submitted content snapshots and action history, with filters and pagination to help investigate cases.
 - **Activity and cost insights:** track daily applicants, approvals, approval rates, screened messages, spam rates, and token usage. Join verification makes no paid model calls by default; profile screening can be enabled when needed.
+- **Verbose group results:** selected groups publish probabilities and results from existing Jev screening. Members can use `/spamcheck id 123456` to evaluate an accessible User/Bot profile, or `/spamcheck text string` to evaluate text; manual evaluations take no moderation actions.
 - **Multilingual experience:** user replies are bilingual Chinese/English, and the verification page supports English and Simplified/Traditional Chinese.
 
 ## Quick start
@@ -61,6 +62,8 @@ docker compose up -d bot
 ```
 
 If you do not know the group ID, leave `MANAGED_CHAT_IDS` empty initially. Send `/whoami@YourBotUsername` in the group, add the returned chat ID, then run `docker compose up -d bot`. Open `/admin` in private chat; for linked discussion groups, select “改用首次发言” (first-seen mode).
+
+To publish model results, add group IDs to `VERBOSE_CHAT_IDS` (a subset of `MANAGED_CHAT_IDS`), recreate the bot container; startup updates group command menus. Verbose does not enable join profile screening automatically; see the [administration guide](docs/ADMIN.md).
 
 Screened content is sent to Jev through OpenRouter. Subsequent ordinary messages, message edits, and text inside images are outside the screening scope.
 

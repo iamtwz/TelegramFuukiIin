@@ -11,6 +11,7 @@ Bot 使用 Telegram long polling，本地保存 SQLite；Cloudflare Pages 仅托
 | `TELEGRAM_BOT_TOKEN` | BotFather 提供的 Token |
 | `BOT_USERNAME` | Bot 用户名，不带 @ |
 | `MANAGED_CHAT_IDS` | 管理的群 ID，逗号分隔；留空时不管理任何群 |
+| `VERBOSE_CHAT_IDS` | 可留空的已管理群子集；公开 Jev 概率与结果并启用 `/spamcheck`，不改变自动审核范围 |
 | `SUPER_ADMIN_IDS` | 可查看全部已配置群的用户 ID，可留空；写操作仍检查群权限 |
 | `OPENROUTER_API_KEY` | OpenRouter API Key |
 | `JEV_MODEL` | 默认 `typesafe/jev-1.13` |
@@ -20,7 +21,7 @@ Bot 使用 Telegram long polling，本地保存 SQLite；Cloudflare Pages 仅托
 | `LOG_LEVEL` | `info`、`verbose` 或 `debug` |
 | `DATABASE_PATH` | 本机运行时的数据路径；Compose 固定使用挂载卷 |
 
-用群内 `/whoami@你的Bot用户名` 获取聊天 ID，私聊 `/whoami` 获取个人 ID。只有配置在 `MANAGED_CHAT_IDS` 中的群会触发审核、验证和后台查询。
+用群内 `/whoami@你的Bot用户名` 获取聊天 ID，私聊 `/whoami` 获取个人 ID。只有配置在 `MANAGED_CHAT_IDS` 中的群会触发审核、验证和后台查询。`VERBOSE_CHAT_IDS` 必须是其子集，两项都只接受有效的负数群 ID；非法值或未管理的 Verbose 群会使配置检查失败。
 
 ## Cloudflare Pages 与 Turnstile
 
@@ -70,6 +71,7 @@ Bot 使用非 root 用户、只读根文件系统，不暴露端口。SQLite 位
 - 允许未入群评论的频道讨论群，在面板切换为“首次发言”。
 - 入群验证需要“管理员批准”的邀请链接；公开入群、直接拉人和其他管理员批准不受此流程约束。
 - 入群资料模型审核默认关闭。开启后，资料审核和验证码都通过才批准。
+- 配置 `VERBOSE_CHAT_IDS` 可公开已有 Jev 审核的概率与结果，并允许当前群成员使用 `/spamcheck id 123456` 或 `/spamcheck text 字符串` 手动判断；详见[管理说明](ADMIN.md)。该设置不主动开启入群资料模型审核，与 `LOG_LEVEL=verbose` 无关。修改后重新创建容器启动时会自动更新群命令菜单。
 
 首次上线用独立测试账号确认：申请后收到按钮、验证码通过后批准、管理员能看到待审案件；对测试账号验证删帖/封禁。不要用生产群成员测试处罚。
 
