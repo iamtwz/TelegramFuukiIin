@@ -23,6 +23,30 @@ Docker 可用时执行 `node scripts/test-docker.mjs`，使用合成配置和隔
 
 ## 提交约定
 
+所有新提交必须遵循 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)，包括合并提交。提交标题格式为：
+
+```text
+type(scope)!: description
+```
+
+- `type` 使用小写；新功能使用 `feat`，修复使用 `fix`，其他常用类型为 `docs`、`refactor`、`perf`、`test`、`style`、`build`、`ci`、`chore` 和 `revert`。
+- `scope` 可选，用于标识模块，例如 `bot`、`verification`、`protocol` 或 `deps`。
+- `!` 可选；不兼容变更必须用 `!` 或正文后的 `BREAKING CHANGE: ...` 标识，并说明影响。
+- 冒号后必须有空格和清晰的变更描述；可选正文与标题之间空一行。
+
+例如：
+
+```text
+feat(bot): add verbose group spam checks
+fix(protocol): reject duplicate submission fields
+docs: require conventional commits
+chore: merge verbose group assessments into main
+```
+
+AI 编程代理还须遵循根目录的 [AGENTS.md](AGENTS.md)。
+
+## 开发约定
+
 - 保留并更新 Cargo/pnpm 锁文件；固定依赖版本，不引入未经审查的 Git 或第三方 registry 依赖，不启用安装脚本。
 - 发布版本以根目录 `Cargo.toml` 的 `workspace.package.version` 为准，同步 Cargo 锁文件中的工作区包和各 npm 包版本；Bot 的版本展示读取构建版本，协议版本和数据库版本独立维护。
 - 面向使用者的功能和行为变化记录到 `CHANGELOG.md` 的“未发布”部分，发布时按版本和日期整理；不要把提交列表直接当作更新日志。
