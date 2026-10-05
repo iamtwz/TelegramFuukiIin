@@ -4,6 +4,10 @@
 
 ## 未发布
 
+### 安全
+
+- 升级固定版本的 Wrangler 至 4.143.1，使用上游修复的 Miniflare / Undici 7.29.1，修复开发与构建工具依赖中的 WebSocket 拒绝服务和 BalancedPool TLS 校验绕过漏洞。
+
 ## 0.3.1 - 2026-10-05
 
 ### 修复
