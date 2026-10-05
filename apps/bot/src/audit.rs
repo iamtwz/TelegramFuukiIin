@@ -46,6 +46,7 @@ impl Filter {
                 "review_allow",
                 "review_ban",
                 "message_deleted",
+                "message_cleanup_skipped",
                 "user_banned",
                 "ban_confirmed",
                 "admin_protected",
@@ -131,6 +132,7 @@ impl Entry {
             "review_allow" => "人工放行",
             "review_ban" => "人工删除封禁",
             "message_deleted" => "消息已删除",
+            "message_cleanup_skipped" => "后续消息清理已跳过",
             "user_banned" => "用户已封禁",
             "ban_confirmed" => "确认已封禁",
             "admin_protected" => "管理员保护",
@@ -157,6 +159,7 @@ impl Entry {
                 | "review_allow"
                 | "review_ban"
                 | "message_deleted"
+                | "message_cleanup_skipped"
                 | "user_banned"
                 | "ban_confirmed"
                 | "admin_protected"
