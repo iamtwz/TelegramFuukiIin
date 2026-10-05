@@ -8,6 +8,8 @@ mod clock_skew;
 mod first_seen;
 #[path = "flows/formatting.rs"]
 mod formatting;
+#[path = "flows/message_cleanup.rs"]
+mod message_cleanup;
 #[path = "flows/profiles_guest.rs"]
 mod profiles_guest;
 #[path = "flows/statistics.rs"]

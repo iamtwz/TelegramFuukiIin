@@ -304,10 +304,12 @@ impl<S: Services> Engine<S> {
                 "not_first_message"
             };
             self.screening_skip(chat, m, reason);
+            let mut jobs = vec![];
+            self.track_case_message(chat, user, message, date, &mut changes, &mut jobs)?;
             return if changes.is_empty() {
                 Ok(())
             } else {
-                self.store.apply(changes, &[], self.now())
+                self.store.apply(changes, &jobs, self.now())
             };
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
@@ -348,6 +350,16 @@ impl<S: Services> Engine<S> {
             reason: None,
         };
         changes.push(change(chat, format!("case:{id}"), &case)?);
+        changes.push(change(
+            chat,
+            format!("message_case:{user}"),
+            &crate::message_cleanup::MessageCase {
+                id: id.clone(),
+                date,
+                created_at: case.created_at,
+                banned_at: None,
+            },
+        )?);
         self.store.apply(
             changes,
             &[NewJob::new(
@@ -674,17 +686,7 @@ impl<S: Services> Engine<S> {
         if c.kind == CaseKind::JoinProfile {
             return self.enforce_join_profile(chat, c).await;
         }
-        let member = self
-            .store
-            .get::<Member>(chat, &format!("member:{}", c.user))?;
-        let current = match c.screening {
-            ScreeningMode::NewMembers => member.as_ref().is_some_and(|m| m.cycle == c.cycle),
-            ScreeningMode::FirstSeen => self
-                .store
-                .get::<FirstMessage>(chat, &format!("first_message:{}", c.user))?
-                .is_some_and(|m| m.message == c.message),
-        };
-        if !current {
+        if !self.current_message_case(chat, &c)? {
             c.state = "expired".into();
             return self.store.put(chat, &format!("case:{id}"), &c);
         }
@@ -712,7 +714,13 @@ impl<S: Services> Engine<S> {
                 Ok(_) => {
                     c.deleted = true;
                     self.store.put(chat, &format!("case:{id}"), &c)?;
-                    self.audit(chat, "message_deleted", id, "", None)?;
+                    self.audit(
+                        chat,
+                        "message_deleted",
+                        id,
+                        &format!("message_id={};scope=first", c.message),
+                        None,
+                    )?;
                 }
                 Err(e) => failure = Some(e),
             }
@@ -734,6 +742,9 @@ impl<S: Services> Engine<S> {
                 Err(e) => failure = Some(e),
             }
         }
+        if c.banned {
+            self.queue_case_messages(chat, &c)?;
+        }
         if let Some(e) = failure {
             return Err(e);
         }
@@ -747,6 +758,7 @@ impl<S: Services> Engine<S> {
             job.kind.as_str(),
             "classify"
                 | "enforce"
+                | "cleanup_message"
                 | "notify"
                 | "welcome"
                 | "alert"
@@ -771,6 +783,7 @@ impl<S: Services> Engine<S> {
             "manual_jev" => self.manual_jev(job).await,
             "verbose_notice" => self.verbose_notice(job).await,
             "enforce" => self.enforce(job.chat, id).await,
+            "cleanup_message" => self.cleanup_message(job).await,
             "welcome" => {
                 self.send(
                     job.payload["user"].as_i64().unwrap_or(0),

@@ -18,6 +18,7 @@ pub mod join_screening;
 pub mod logging;
 pub mod markdown;
 pub mod menus;
+mod message_cleanup;
 pub mod model;
 pub mod notifications;
 pub mod profiles;

@@ -316,6 +316,10 @@ impl Store {
             "DELETE FROM records WHERE key LIKE 'case:%' AND json_extract(value,'$.created_at')<?1",
             [now - 3_196_800],
         )?;
+        tx.execute(
+            "DELETE FROM records WHERE (key LIKE 'message_case:%' OR key LIKE 'case_message:%') AND json_extract(value,'$.created_at')<?1",
+            [now - 3_196_800],
+        )?;
         tx.commit()?;
         Ok(())
     }

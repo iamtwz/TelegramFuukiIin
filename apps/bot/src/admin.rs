@@ -360,11 +360,28 @@ async fn case_detail<S: Services>(
         button(chat, "返回上一级", "pending", &offset.to_string()),
         button(chat, "管理面板", "panel", "")
     ]));
+    let tracks_followups = case.kind == CaseKind::Message
+        && (e
+            .store
+            .get::<crate::message_cleanup::MessageCase>(
+                chat,
+                &format!("message_case:{}", case.user),
+            )?
+            .is_some_and(|index| index.id == case.id)
+            || !e
+                .store
+                .list::<Value>(chat, &format!("case_message:{}:", case.id), None, 0, 1)?
+                .is_empty());
+    let cleanup_scope = if tracks_followups {
+        "\n删除范围：首条消息及封禁前记录的同一发送者后续消息；后续清理独立执行，可在审计中查看结果。"
+    } else {
+        ""
+    };
     reply
         .send_markdown(
             e,
             &format!(
-                "{}：{}\n群：{group}\n第 {}/{} 页\n{}",
+                "{}：{}\n群：{group}{cleanup_scope}\n第 {}/{} 页\n{}",
                 bold("案件详情"),
                 code(id),
                 code(&(page + 1).to_string()),
