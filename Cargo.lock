@@ -297,21 +297,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
-name = "fuuki-iin-bot"
-version = "0.3.1"
-dependencies = [
- "clap",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "uuid",
- "verification-protocol",
-]
-
-[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -342,6 +327,21 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuuki-iin-bot"
+version = "0.3.1"
+dependencies = [
+ "clap",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "verification-protocol",
 ]
 
 [[package]]
@@ -1324,9 +1324,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
