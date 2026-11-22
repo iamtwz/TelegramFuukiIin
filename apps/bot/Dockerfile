@@ -1,5 +1,5 @@
 # Official multi-platform images, pinned by digest. Keep Rust aligned with rust-toolchain.toml.
-FROM rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+FROM rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake \
